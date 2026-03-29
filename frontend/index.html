@@ -286,6 +286,18 @@
     background: #052e16;
     color: #22c55e;
   }
+  .agent-box-status.offline {
+    background: #450a0a;
+    color: #f87171;
+    animation: pulse 1s infinite;
+  }
+  .agent-box.agent-offline {
+    opacity: 0.5;
+    border-color: #ef4444;
+  }
+  .agent-box.agent-offline .agent-box-header {
+    background: #1a1215;
+  }
   .agent-box-body {
     padding: 0;
     max-height: 0;
@@ -428,6 +440,7 @@
   .status-delivering { background: #1a2e1a; color: #4ade80; }
   .status-returning { background: #422006; color: #fbbf24; }
   .status-failed { background: #450a0a; color: #f87171; animation: pulse 1s infinite; }
+  .status-disconnected { background: #450a0a; color: #f87171; animation: pulse 1s infinite; }
   .status-recovered { background: #422006; color: #fbbf24; }
   .status-pending { background: #1e293b; color: #94a3b8; }
   .status-assigned { background: #172554; color: #60a5fa; }
@@ -583,6 +596,55 @@
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
   }
+
+  /* Per-crew disconnect banner */
+  .crew-disconnect-banner {
+    display: none;
+    position: fixed;
+    top: 56px;
+    left: 420px;
+    right: 0;
+    background: rgba(239, 68, 68, 0.88);
+    z-index: 999;
+    pointer-events: none;
+    padding: 8px 0;
+    text-align: center;
+  }
+  .crew-disconnect-banner.active { display: block; animation: crash-flash 0.4s ease-out; }
+  .crew-disconnect-banner.recovering {
+    background: rgba(56, 189, 248, 0.88);
+    animation: replay-pulse 1.5s ease-in-out infinite;
+  }
+  .crew-disconnect-banner .banner-text {
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+  }
+  .crew-disconnect-banner .banner-sub {
+    font-size: 11px;
+    color: rgba(255,255,255,0.85);
+    margin-top: 2px;
+  }
+
+  /* Crew select dropdown */
+  .crew-select {
+    background: #1e2130;
+    color: #e0e0e0;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+  .agent-select {
+    background: #1e2130;
+    color: #e0e0e0;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
 </style>
 </head>
 <body>
@@ -596,9 +658,11 @@
 </header>
 
 <div class="tab-bar">
-  <button class="tab active" data-tab="crash" onclick="switchTab('crash')">Crash Recovery</button>
+  <button class="tab active" data-tab="crew" onclick="switchTab('crew')">Crew Disconnect</button>
+  <button class="tab" data-tab="agent" onclick="switchTab('agent')">Agent Disconnect</button>
   <button class="tab" data-tab="cooler" onclick="switchTab('cooler')">Cooler Malfunction</button>
   <button class="tab" data-tab="customer" onclick="switchTab('customer')">Customer Change</button>
+  <button class="tab" data-tab="crash" onclick="switchTab('crash')">Full System Crash</button>
   <div class="status-area">
     <div id="worker-status" class="worker-indicator online">
       <div class="worker-dot"></div>
@@ -607,9 +671,32 @@
   </div>
 </div>
 <div class="tab-panels">
-  <div class="tab-panel active" id="panel-crash">
+  <div class="tab-panel active" id="panel-crew">
     <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
-    <button class="btn btn-crash" onclick="crashService()">Service Disruption</button>
+    <select id="crew-disconnect-select" class="crew-select">
+      <option value="ai-crew-1">AI-Crew 1</option>
+      <option value="ai-crew-2">AI-Crew 2</option>
+      <option value="ai-crew-3">AI-Crew 3</option>
+    </select>
+    <button class="btn btn-crash" onclick="disconnectCrew()">Disconnect Crew</button>
+    <button class="btn btn-restart" onclick="reconnectCrew()">Reconnect Crew</button>
+    <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
+  </div>
+  <div class="tab-panel" id="panel-agent">
+    <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
+    <select id="agent-disconnect-select" class="agent-select">
+      <option value="fleet_agent">Fleet Agent</option>
+      <option value="customer_agent">Customer Agent</option>
+      <option value="resolver">Resolver</option>
+    </select>
+    <button class="btn btn-crash" onclick="disconnectAgent()">Take Agent Offline</button>
+    <button class="btn btn-restart" onclick="reconnectAgent()">Bring Agent Online</button>
+    <button class="btn btn-disrupt" onclick="triggerDisruption()">Trigger Cooler Malfunction</button>
+    <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
+  </div>
+  <div class="tab-panel" id="panel-crash">
+    <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
+    <button class="btn btn-crash" onclick="crashService()">Crash Entire Service</button>
     <button class="btn btn-restart" onclick="restartService()">Reconnect</button>
     <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
   </div>
@@ -723,6 +810,11 @@
   <div class="replay-sub">Restoring workflow state from durable history</div>
 </div>
 
+<div id="crew-disconnect-banner" class="crew-disconnect-banner">
+  <div class="banner-text"><span id="crew-banner-text">AI-Crew Disconnected</span></div>
+  <div class="banner-sub"><span id="crew-banner-sub">Other crews continue delivering. Temporal will retry when reconnected.</span></div>
+</div>
+
 <script>
 // --- Collapsible sections ---
 function toggleSection(id) {
@@ -772,6 +864,7 @@ const CREW_COLORS = {
   returning: '#fbbf24',
   failed: '#ef4444',
   recovered: '#fbbf24',
+  disconnected: '#ef4444',
 };
 
 // --- Load locations ---
@@ -813,10 +906,11 @@ function connectWS() {
     const state = JSON.parse(e.data);
     updateCrews(state.crews);
     updateOrders(state.orders);
-    updateAgentEvents(state.agent_events);
+    updateAgentEvents(state.agent_events, state.agent_health);
     updateEventLog(state.event_log);
     updateRecoveryOverlay(state.recovery);
     updateDisruptionAlert(state.crews, state.orders);
+    updateCrewDisconnectBanner(state.crews);
   };
   ws.onclose = () => setTimeout(connectWS, 1000);
 }
@@ -907,10 +1001,25 @@ function detectPhase(events) {
   return disruptionStartIdx;
 }
 
-function updateAgentEvents(events) {
+function updateAgentEvents(events, agentHealth) {
   if (!events) return;
 
   const totalCount = events.length;
+
+  // Update per-agent offline visual state
+  if (agentHealth) {
+    AGENT_IDS.forEach(agentId => {
+      const box = document.getElementById(`agent-box-${agentId}`);
+      if (agentHealth[agentId] === false) {
+        box.classList.add('agent-offline');
+        const statusEl = box.querySelector('.agent-box-status');
+        statusEl.className = 'agent-box-status offline';
+        statusEl.textContent = 'Offline';
+      } else {
+        box.classList.remove('agent-offline');
+      }
+    });
+  }
 
   // Group events by agent
   const grouped = { fleet_agent: [], customer_agent: [], resolver: [] };
@@ -948,10 +1057,15 @@ function updateAgentEvents(events) {
     const statusEl = box.querySelector('.agent-box-status');
     const agentEvents = grouped[agentId];
 
+    // Skip status updates for offline agents (handled above)
+    const isOffline = agentHealth && agentHealth[agentId] === false;
+
     if (agentEvents.length === 0) {
-      box.classList.remove('active');
-      statusEl.className = 'agent-box-status waiting';
-      statusEl.textContent = 'Waiting';
+      if (!isOffline) {
+        box.classList.remove('active');
+        statusEl.className = 'agent-box-status waiting';
+        statusEl.textContent = 'Waiting';
+      }
       body.innerHTML = '';
       prevEventCounts[agentId] = 0;
       return;
@@ -963,12 +1077,14 @@ function updateAgentEvents(events) {
     const agentHasNewEvents = agentEvents.length > prevEventCounts[agentId];
     const isThinking = isActivelyReasoning || agentHasNewEvents;
 
-    if (isThinking) {
-      statusEl.className = 'agent-box-status thinking';
-      statusEl.textContent = inDisruptionPhase ? 'Disruption' : 'Reasoning';
-    } else {
-      statusEl.className = 'agent-box-status done';
-      statusEl.textContent = 'Complete';
+    if (!isOffline) {
+      if (isThinking) {
+        statusEl.className = 'agent-box-status thinking';
+        statusEl.textContent = inDisruptionPhase ? 'Disruption' : 'Reasoning';
+      } else {
+        statusEl.className = 'agent-box-status done';
+        statusEl.textContent = 'Complete';
+      }
     }
 
     // Only re-render if event count changed
@@ -1237,6 +1353,56 @@ async function injectConditions() {
   document.getElementById('btn-operator-reject').style.display = 'none';
 }
 
+// --- Per-crew disconnect/reconnect ---
+async function disconnectCrew() {
+  const crewId = document.getElementById('crew-disconnect-select').value;
+  const result = await api('disconnect-crew', 'POST', { crew_id: crewId });
+  console.log('Crew disconnected:', result);
+}
+
+async function reconnectCrew() {
+  const crewId = document.getElementById('crew-disconnect-select').value;
+  const result = await api('reconnect-crew', 'POST', { crew_id: crewId });
+  console.log('Crew reconnected:', result);
+}
+
+function updateCrewDisconnectBanner(crews) {
+  const banner = document.getElementById('crew-disconnect-banner');
+  const textEl = document.getElementById('crew-banner-text');
+  const subEl = document.getElementById('crew-banner-sub');
+
+  const disconnected = Object.values(crews).filter(c => c.disconnected);
+  const recovering = Object.values(crews).filter(c => c.recovering);
+
+  if (recovering.length > 0) {
+    const ids = recovering.map(c => c.crew_id).join(', ');
+    banner.classList.add('active', 'recovering');
+    textEl.textContent = `Replaying — ${ids}`;
+    subEl.textContent = 'Temporal restoring workflow state from durable history...';
+  } else if (disconnected.length > 0) {
+    const ids = disconnected.map(c => c.crew_id).join(', ');
+    banner.classList.add('active');
+    banner.classList.remove('recovering');
+    textEl.textContent = `${ids} Disconnected`;
+    subEl.textContent = 'Other crews continue delivering. Temporal will retry when reconnected.';
+  } else {
+    banner.classList.remove('active', 'recovering');
+  }
+}
+
+// --- Per-agent disconnect/reconnect ---
+async function disconnectAgent() {
+  const agentName = document.getElementById('agent-disconnect-select').value;
+  const result = await api('disconnect-agent', 'POST', { agent_name: agentName });
+  console.log('Agent disconnected:', result);
+}
+
+async function reconnectAgent() {
+  const agentName = document.getElementById('agent-disconnect-select').value;
+  const result = await api('reconnect-agent', 'POST', { agent_name: agentName });
+  console.log('Agent reconnected:', result);
+}
+
 async function resetDemo() {
   Object.values(crewTrails).forEach(t => t.setLatLngs([]));
   const result = await api('reset');
@@ -1258,10 +1424,13 @@ async function resetDemo() {
   const el = document.getElementById('worker-status');
   el.className = 'worker-indicator online';
   el.innerHTML = '<div class="worker-dot"></div><span>Service Online</span>';
+  // Reset crew disconnect banner
+  const crewBanner = document.getElementById('crew-disconnect-banner');
+  crewBanner.classList.remove('active', 'recovering');
   // Reset agent boxes
   AGENT_IDS.forEach(agentId => {
     const box = document.getElementById(`agent-box-${agentId}`);
-    box.classList.remove('active');
+    box.classList.remove('active', 'agent-offline');
     box.querySelector('.agent-box-status').className = 'agent-box-status waiting';
     box.querySelector('.agent-box-status').textContent = 'Waiting';
     box.querySelector('.agent-box-body').innerHTML = '';

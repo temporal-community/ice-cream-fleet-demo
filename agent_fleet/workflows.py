@@ -37,9 +37,11 @@ with workflow.unsafe.imports_passed_through():
         WAREHOUSE,
     )
     from agent_fleet.models import (
+        AgentDisconnectInput,
         AssignOrdersInput,
         ConditionUpdate,
         CoordinateDeliveryInput,
+        CrewDisconnectInput,
         CrewRouteInput,
         CrewRouteOrder,
         CustomerChangeInput,
@@ -225,6 +227,8 @@ class MeltdownDemoWorkflow:
         self._operator_decision: OperatorDecision | None = None
         self._pending_updates: list[ConditionUpdate] = []
         self._current_recommendation: RecoveryPlan | None = None
+        self._disconnected_crews: set[str] = set()
+        self._disconnected_agents: set[str] = set()
 
     # --- Signals ---
 
@@ -250,6 +254,30 @@ class MeltdownDemoWorkflow:
     @workflow.signal
     async def updated_conditions(self, update: ConditionUpdate) -> None:
         self._pending_updates.append(update)
+
+    @workflow.signal
+    async def crew_disconnected(self, inp: CrewDisconnectInput) -> None:
+        """A single crew has been disconnected. Its activities will fail and retry."""
+        self._disconnected_crews.add(inp.crew_id)
+        workflow.logger.info(f"Crew {inp.crew_id} disconnected — activities will retry")
+
+    @workflow.signal
+    async def crew_reconnected(self, inp: CrewDisconnectInput) -> None:
+        """A crew has been reconnected. Its retrying activities will succeed."""
+        self._disconnected_crews.discard(inp.crew_id)
+        workflow.logger.info(f"Crew {inp.crew_id} reconnected — resuming")
+
+    @workflow.signal
+    async def agent_disconnected(self, inp: AgentDisconnectInput) -> None:
+        """An agent has gone offline. Other agents compensate."""
+        self._disconnected_agents.add(inp.agent_name)
+        workflow.logger.info(f"Agent {inp.agent_name} disconnected")
+
+    @workflow.signal
+    async def agent_reconnected(self, inp: AgentDisconnectInput) -> None:
+        """An agent is back online."""
+        self._disconnected_agents.discard(inp.agent_name)
+        workflow.logger.info(f"Agent {inp.agent_name} reconnected")
 
     # --- Main entry ---
 

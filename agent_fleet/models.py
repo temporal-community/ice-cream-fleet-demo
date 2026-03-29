@@ -18,6 +18,7 @@ class CrewStatus(str, enum.Enum):
     RETURNING = "returning"
     FAILED = "failed"
     RECOVERED = "recovered"
+    DISCONNECTED = "disconnected"
 
 
 class CoolerStatus(str, enum.Enum):
@@ -70,6 +71,9 @@ class Crew:
     capacity: int = 3
     current_orders: list[str] = field(default_factory=list)
     path_history: list[dict[str, float]] = field(default_factory=list)
+    disconnected: bool = False
+    recovering: bool = False
+    status_before_disconnect: CrewStatus = CrewStatus.IDLE
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +86,8 @@ class Crew:
             "capacity": self.capacity,
             "current_orders": self.current_orders,
             "path_history": self.path_history,
+            "disconnected": self.disconnected,
+            "recovering": self.recovering,
         }
 
 
@@ -397,6 +403,16 @@ class DisruptionSignalInput:
 
 
 # --- Workflow inputs ---
+
+
+@dataclass
+class CrewDisconnectInput:
+    crew_id: str
+
+
+@dataclass
+class AgentDisconnectInput:
+    agent_name: str  # "fleet_agent", "customer_agent", or "resolver"
 
 
 @dataclass

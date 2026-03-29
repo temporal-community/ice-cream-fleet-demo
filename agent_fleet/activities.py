@@ -211,6 +211,13 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
     if fleet.is_recovering():
         activity.logger.info(f"[REPLAY] Resuming navigation for {inp.crew_id}")
 
+    # Per-crew disconnect: if this crew is disconnected, fail the activity.
+    # Temporal will keep retrying until the crew is reconnected.
+    if await fleet.is_crew_disconnected(inp.crew_id):
+        raise RuntimeError(
+            f"AI-Crew {inp.crew_id} is disconnected — activity will retry on reconnect"
+        )
+
     leg = inp.leg if isinstance(inp.leg, str) else str(inp.leg)
     status = (
         CrewStatus.EN_ROUTE_PICKUP
@@ -228,6 +235,13 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
 
     for step in range(1, inp.steps + 1):
         activity.heartbeat(f"step {step}/{inp.steps}")
+
+        # Check disconnect mid-navigation too
+        if await fleet.is_crew_disconnected(inp.crew_id):
+            activity.logger.warning(f"{inp.crew_id} disconnected at step {step}/{inp.steps}")
+            raise RuntimeError(
+                f"AI-Crew {inp.crew_id} disconnected mid-navigation at step {step}"
+            )
 
         fraction = step / inp.steps
         new_lat = start_lat + (inp.target_lat - start_lat) * fraction
@@ -255,6 +269,8 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
 @activity.defn(name="pickup_orders")
 async def pickup_orders(inp: PickupInput) -> PickupOutput:
     """Simulate picking up ice cream orders at the kitchen."""
+    if await fleet.is_crew_disconnected(inp.crew_id):
+        raise RuntimeError(f"AI-Crew {inp.crew_id} is disconnected")
     await fleet.set_crew_status(inp.crew_id, CrewStatus.PICKING_UP)
     for oid in inp.order_ids:
         await fleet.update_order_status(oid, OrderStatus.PICKED_UP, "Ice cream loaded into cooler")
@@ -268,6 +284,8 @@ async def pickup_orders(inp: PickupInput) -> PickupOutput:
 @activity.defn(name="deliver_order")
 async def deliver_order(inp: DeliverInput) -> DeliverOutput:
     """Simulate delivering an ice cream order at a hotel."""
+    if await fleet.is_crew_disconnected(inp.crew_id):
+        raise RuntimeError(f"AI-Crew {inp.crew_id} is disconnected")
     await fleet.set_crew_status(inp.crew_id, CrewStatus.DELIVERING)
     await fleet.update_order_status(inp.order_id, OrderStatus.IN_TRANSIT, "Delivering to hotel")
 
@@ -450,9 +468,8 @@ async def resolve_disruption_mock(
             error=f"No backup AI-Crew available: {reason}",
         )
 
-    # --- Fleet Agent: operational assessment ---
-    # Gather real fleet state for realistic reasoning
-    await fleet.get_fleet_summary()  # warm the cache for realistic demo timing
+    # --- Gather state for agent reasoning ---
+    await fleet.get_fleet_summary()
     backup_crew = await fleet.get_crew(crew_id)
     failed_crew = await fleet.get_crew(inp.disruption_crew_id)
 
@@ -460,34 +477,57 @@ async def resolve_disruption_mock(
     backup_capacity = (backup_crew.capacity - len(backup_orders)) if backup_crew else 0
     failed_temp = failed_crew.cooler_temp_f if failed_crew else inp.cooler_temp_f
 
-    await fleet.publish_agent_event(
-        "fleet_agent",
-        "tool_call",
-        "Calling tool_get_fleet_status to check AI-Crew positions, "
-        "cooler conditions, and available capacity...",
-        summary="Checking fleet status...",
-    )
-    events_published += 1
-    await asyncio.sleep(0.4)
+    # Check per-agent health — skip offline agents
+    fleet_online = await fleet.is_agent_online("fleet_agent")
+    customer_online = await fleet.is_agent_online("customer_agent")
+    resolver_online = await fleet.is_agent_online("resolver")
 
-    await fleet.publish_agent_event(
-        "fleet_agent",
-        "assessment",
-        f"COOLER FAILURE on {inp.disruption_crew_id} — "
-        f"temperature has reached {failed_temp:.0f}F and climbing fast. "
-        f"Ice cream integrity is compromised.\n\n"
-        f"Fleet scan results:\n"
-        f"- {crew_id} is the best reroute candidate — "
-        f"cooler is nominal, {backup_capacity} capacity slots open, "
-        f"and closest to the affected route.\n"
-        f"- Other AI-Crews either have cooler issues or lack capacity "
-        f"for {len(inp.affected_order_ids)} additional orders.\n\n"
-        f"RECOMMENDATION: Immediately reroute all {len(inp.affected_order_ids)} "
-        f"orders to {crew_id} and return {inp.disruption_crew_id} to kitchen.",
-        summary=f"{crew_id} is closest — recommending reroute",
-    )
-    events_published += 1
-    await asyncio.sleep(0.3)
+    fleet_assessment = ""
+    customer_assessment = ""
+
+    # --- Fleet Agent: operational assessment ---
+    if fleet_online:
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "tool_call",
+            "Calling tool_get_fleet_status to check AI-Crew positions, "
+            "cooler conditions, and available capacity...",
+            summary="Checking fleet status...",
+        )
+        events_published += 1
+        await asyncio.sleep(0.4)
+
+        fleet_assessment = (
+            f"COOLER FAILURE on {inp.disruption_crew_id} — "
+            f"temperature has reached {failed_temp:.0f}F and climbing fast. "
+            f"Ice cream integrity is compromised.\n\n"
+            f"Fleet scan results:\n"
+            f"- {crew_id} is the best reroute candidate — "
+            f"cooler is nominal, {backup_capacity} capacity slots open, "
+            f"and closest to the affected route.\n"
+            f"- Other AI-Crews either have cooler issues or lack capacity "
+            f"for {len(inp.affected_order_ids)} additional orders.\n\n"
+            f"RECOMMENDATION: Immediately reroute all {len(inp.affected_order_ids)} "
+            f"orders to {crew_id} and return {inp.disruption_crew_id} to kitchen."
+        )
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "assessment",
+            fleet_assessment,
+            summary=f"{crew_id} is closest — recommending reroute",
+        )
+        events_published += 1
+        await asyncio.sleep(0.3)
+    else:
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "offline",
+            f"Fleet Agent is OFFLINE — unable to provide operational assessment. "
+            f"Other agents will compensate.",
+            summary="Fleet Agent offline",
+        )
+        events_published += 1
+        await asyncio.sleep(0.3)
 
     # --- Customer Agent: customer impact assessment ---
     order_details = []
@@ -498,66 +538,124 @@ async def resolve_disruption_mock(
             order_details.append(order)
             total_servings += order.servings
 
-    await fleet.publish_agent_event(
-        "customer_agent",
-        "tool_call",
-        "Calling tool_get_order_priorities to check VIP status, deadlines, and servings at risk...",
-        summary="Checking order priorities...",
-    )
-    events_published += 1
-    await asyncio.sleep(0.4)
-
-    order_lines = []
-    for o in order_details:
-        urgency = "URGENT" if o.deadline_minutes <= 30 else "moderate"
-        order_lines.append(
-            f"- {o.order_id} -> {o.hotel}: {o.priority.value.upper()} priority, "
-            f"{o.servings} servings, {o.deadline_minutes}min deadline [{urgency}]"
+    if customer_online:
+        await fleet.publish_agent_event(
+            "customer_agent",
+            "tool_call",
+            "Calling tool_get_order_priorities to check VIP status, "
+            "deadlines, and servings at risk...",
+            summary="Checking order priorities...",
         )
-    orders_text = "\n".join(order_lines) if order_lines else "No order details available"
+        events_published += 1
+        await asyncio.sleep(0.4)
 
-    await fleet.publish_agent_event(
-        "customer_agent",
-        "assessment",
-        f"CUSTOMER IMPACT — {total_servings} total servings at risk "
-        f"across {len(inp.affected_order_ids)} orders:\n\n"
-        f"{orders_text}\n\n"
-        f"All affected orders are VIP-tier with tight deadlines. "
-        f"These are high-profile hotel events — MGM pool parties, "
-        f"Caesars banquets. A melted delivery would be a reputation disaster.\n\n"
-        f"RECOMMENDATION: Prioritize fastest possible reroute to {crew_id}. "
-        f"Proactively notify hotel event coordinators of the slight delay. "
-        f"VIP orders must be delivered first on the backup AI-Crew's route.",
-        summary=f"{total_servings} servings at risk — reroute to {crew_id} ASAP",
-    )
-    events_published += 1
-    await asyncio.sleep(0.3)
+        order_lines = []
+        for o in order_details:
+            urgency = "URGENT" if o.deadline_minutes <= 30 else "moderate"
+            order_lines.append(
+                f"- {o.order_id} -> {o.hotel}: {o.priority.value.upper()} priority, "
+                f"{o.servings} servings, {o.deadline_minutes}min deadline [{urgency}]"
+            )
+        orders_text = "\n".join(order_lines) if order_lines else "No order details available"
+
+        customer_assessment = (
+            f"CUSTOMER IMPACT — {total_servings} total servings at risk "
+            f"across {len(inp.affected_order_ids)} orders:\n\n"
+            f"{orders_text}\n\n"
+            f"All affected orders are VIP-tier with tight deadlines. "
+            f"These are high-profile hotel events — MGM pool parties, "
+            f"Caesars banquets. A melted delivery would be a reputation disaster.\n\n"
+            f"RECOMMENDATION: Prioritize fastest possible reroute to {crew_id}. "
+            f"Proactively notify hotel event coordinators of the slight delay. "
+            f"VIP orders must be delivered first on the backup AI-Crew's route."
+        )
+        await fleet.publish_agent_event(
+            "customer_agent",
+            "assessment",
+            customer_assessment,
+            summary=f"{total_servings} servings at risk — reroute to {crew_id} ASAP",
+        )
+        events_published += 1
+        await asyncio.sleep(0.3)
+    else:
+        await fleet.publish_agent_event(
+            "customer_agent",
+            "offline",
+            f"Customer Agent is OFFLINE — unable to assess customer impact. "
+            f"Other agents will compensate.",
+            summary="Customer Agent offline",
+        )
+        events_published += 1
+        await asyncio.sleep(0.3)
 
     # --- Resolver: synthesize and decide ---
-    await fleet.publish_agent_event(
-        "resolver",
-        "synthesis",
-        f"Fleet Agent recommends {crew_id} (best capacity + proximity). "
-        f"Customer Agent confirms all {len(inp.affected_order_ids)} orders are "
-        f"VIP with tight deadlines — {total_servings} servings at stake.\n\n"
-        f"Both agents agree on immediate reroute. No conflict to resolve.",
-        summary="Both agents agree — rerouting immediately",
-    )
-    events_published += 1
-    await asyncio.sleep(0.3)
+    if resolver_online:
+        # Adapt synthesis based on which agents contributed
+        if fleet_online and customer_online:
+            synthesis = (
+                f"Fleet Agent recommends {crew_id} (best capacity + proximity). "
+                f"Customer Agent confirms all {len(inp.affected_order_ids)} orders are "
+                f"VIP with tight deadlines — {total_servings} servings at stake.\n\n"
+                f"Both agents agree on immediate reroute. No conflict to resolve."
+            )
+            synthesis_summary = "Both agents agree — rerouting immediately"
+        elif fleet_online:
+            synthesis = (
+                f"Customer Agent is OFFLINE. Operating with Fleet Agent input only.\n\n"
+                f"Fleet Agent recommends {crew_id} as best reroute candidate. "
+                f"Without customer impact data, defaulting to fastest reroute "
+                f"to protect {len(inp.affected_order_ids)} orders from melting."
+            )
+            synthesis_summary = "Customer Agent offline — using fleet data only"
+        elif customer_online:
+            synthesis = (
+                f"Fleet Agent is OFFLINE. Operating with Customer Agent input only.\n\n"
+                f"Customer Agent reports {total_servings} VIP servings at risk. "
+                f"Using backup crew selection ({crew_id}) based on proximity data. "
+                f"Proceeding with reroute despite missing operational assessment."
+            )
+            synthesis_summary = "Fleet Agent offline — using customer data only"
+        else:
+            synthesis = (
+                f"BOTH Fleet Agent and Customer Agent are OFFLINE.\n\n"
+                f"Resolver operating autonomously with available system data. "
+                f"Backup crew {crew_id} selected by proximity + capacity algorithm. "
+                f"{len(inp.affected_order_ids)} orders will be rerouted immediately."
+            )
+            synthesis_summary = "Both agents offline — resolver acting autonomously"
 
-    await fleet.publish_agent_event(
-        "resolver",
-        "plan",
-        f"RECOVERY PLAN FINALIZED:\n"
-        f"1. Reroute {inp.affected_order_ids} -> {crew_id} (immediate)\n"
-        f"2. {inp.disruption_crew_id} -> return to kitchen (cooler failed)\n"
-        f"3. Notify hotel coordinators: slight delay, VIP orders prioritized\n"
-        f"4. {crew_id} delivers VIP orders first by deadline urgency\n\n"
-        f"Calling tool_submit_recovery_plan...",
-        summary=f"Rerouting orders to {crew_id}",
-    )
-    events_published += 1
+        await fleet.publish_agent_event(
+            "resolver",
+            "synthesis",
+            synthesis,
+            summary=synthesis_summary,
+        )
+        events_published += 1
+        await asyncio.sleep(0.3)
+
+        await fleet.publish_agent_event(
+            "resolver",
+            "plan",
+            f"RECOVERY PLAN FINALIZED:\n"
+            f"1. Reroute {inp.affected_order_ids} -> {crew_id} (immediate)\n"
+            f"2. {inp.disruption_crew_id} -> return to kitchen (cooler failed)\n"
+            f"3. Notify hotel coordinators: slight delay, VIP orders prioritized\n"
+            f"4. {crew_id} delivers VIP orders first by deadline urgency\n\n"
+            f"Calling tool_submit_recovery_plan...",
+            summary=f"Rerouting orders to {crew_id}",
+        )
+        events_published += 1
+    else:
+        # Resolver offline — publish emergency fallback
+        await fleet.publish_agent_event(
+            "resolver",
+            "offline",
+            f"Resolver Agent is OFFLINE — executing automatic failsafe.\n"
+            f"System will reroute {inp.affected_order_ids} to {crew_id} "
+            f"based on proximity algorithm without agent synthesis.",
+            summary="Resolver offline — automatic failsafe",
+        )
+        events_published += 1
 
     plan = RecoveryPlan(
         reroute_to_crew_id=crew_id,

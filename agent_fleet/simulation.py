@@ -47,6 +47,12 @@ class FleetState:
         # Recovery / replay tracking
         self.worker_generation: int = 0
         self.recovery_phase: bool = False
+        # Per-agent health tracking
+        self.agent_health: dict[str, bool] = {
+            "fleet_agent": True,
+            "customer_agent": True,
+            "resolver": True,
+        }
         self._init_state()
 
     def _init_state(self) -> None:
@@ -81,6 +87,11 @@ class FleetState:
         self._nav_step_counters.clear()
         self.worker_generation = 0
         self.recovery_phase = False
+        self.agent_health = {
+            "fleet_agent": True,
+            "customer_agent": True,
+            "resolver": True,
+        }
         self._init_state()
 
     async def mark_worker_restart(self) -> None:
@@ -99,6 +110,59 @@ class FleetState:
     def is_recovering(self) -> bool:
         """Check if the worker is currently in recovery/replay phase."""
         return self.recovery_phase
+
+    # --- Per-crew disconnect / reconnect ---
+
+    async def disconnect_crew(self, crew_id: str) -> None:
+        """Mark a single crew as disconnected. Its activity will start failing."""
+        async with self._lock:
+            c = self.crews[crew_id]
+            c.status_before_disconnect = c.status
+            c.disconnected = True
+            c.status = CrewStatus.DISCONNECTED
+            self._log(f"[DISCONNECT] AI-Crew {crew_id} lost connection")
+
+    async def reconnect_crew(self, crew_id: str) -> None:
+        """Clear disconnect flag and enter per-crew recovery phase."""
+        async with self._lock:
+            c = self.crews[crew_id]
+            c.disconnected = False
+            c.recovering = True
+            c.status = c.status_before_disconnect
+            self._log(f"[RECONNECT] AI-Crew {crew_id} reconnecting — replaying...")
+
+    async def mark_crew_recovery_complete(self, crew_id: str) -> None:
+        """Clear the per-crew recovery flag after replay completes."""
+        async with self._lock:
+            c = self.crews[crew_id]
+            c.recovering = False
+            self._log(f"[RECONNECT] AI-Crew {crew_id} replay complete — resumed")
+
+    async def is_crew_disconnected(self, crew_id: str) -> bool:
+        async with self._lock:
+            return self.crews[crew_id].disconnected
+
+    # --- Per-agent health ---
+
+    async def disconnect_agent(self, agent_name: str) -> None:
+        """Mark a specific agent as offline."""
+        async with self._lock:
+            self.agent_health[agent_name] = False
+            self._log(f"[AGENT OFFLINE] {agent_name} disconnected")
+
+    async def reconnect_agent(self, agent_name: str) -> None:
+        """Bring a specific agent back online."""
+        async with self._lock:
+            self.agent_health[agent_name] = True
+            self._log(f"[AGENT ONLINE] {agent_name} reconnected")
+
+    async def is_agent_online(self, agent_name: str) -> bool:
+        async with self._lock:
+            return self.agent_health.get(agent_name, True)
+
+    async def get_agent_health(self) -> dict[str, bool]:
+        async with self._lock:
+            return dict(self.agent_health)
 
     # --- Crew operations ---
 
@@ -345,6 +409,7 @@ class FleetState:
                     "phase": self.recovery_phase,
                     "worker_generation": self.worker_generation,
                 },
+                "agent_health": dict(self.agent_health),
             }
 
     async def get_fleet_summary(self) -> str:

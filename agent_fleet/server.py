@@ -25,7 +25,9 @@ from temporalio.service import RPCError
 
 from agent_fleet.locations import DELIVERY_DESTINATIONS, WAREHOUSE, WAREHOUSE_LABEL
 from agent_fleet.models import (
+    AgentDisconnectInput,
     ConditionUpdate,
+    CrewDisconnectInput,
     CustomerChangeInput,
     DemoEventConfig,
     DisruptionSignalInput,
@@ -188,6 +190,132 @@ async def reset_demo():
     await _cancel_running_workflows()
     fleet.reset()
     return {"status": "reset"}
+
+
+# --- Per-crew disconnect/reconnect ---
+
+
+class CrewDisconnectRequest(BaseModel):
+    crew_id: str = "ai-crew-1"
+
+
+@app.post("/api/disconnect-crew")
+async def disconnect_crew(body: CrewDisconnectRequest):
+    """Disconnect a single crew — its activities will fail and Temporal will retry."""
+    await fleet.disconnect_crew(body.crew_id)
+
+    # Signal the workflow so it knows
+    if _temporal_client is not None:
+        try:
+            handle = _temporal_client.get_workflow_handle("meltdown-demo")
+            await handle.signal(
+                MeltdownDemoWorkflow.crew_disconnected,
+                CrewDisconnectInput(crew_id=body.crew_id),
+            )
+        except Exception as e:
+            logger.error(f"Failed to signal crew disconnect: {e}")
+
+    return {
+        "status": "crew_disconnected",
+        "crew_id": body.crew_id,
+        "message": f"AI-Crew {body.crew_id} disconnected. Other crews continue delivering.",
+    }
+
+
+@app.post("/api/reconnect-crew")
+async def reconnect_crew(body: CrewDisconnectRequest):
+    """Reconnect a crew — Temporal retries its activities and it resumes."""
+    await fleet.reconnect_crew(body.crew_id)
+
+    # Signal the workflow
+    if _temporal_client is not None:
+        try:
+            handle = _temporal_client.get_workflow_handle("meltdown-demo")
+            await handle.signal(
+                MeltdownDemoWorkflow.crew_reconnected,
+                CrewDisconnectInput(crew_id=body.crew_id),
+            )
+        except Exception as e:
+            logger.error(f"Failed to signal crew reconnect: {e}")
+
+    # Clear recovery phase after a delay (visual replay indicator)
+    async def _clear_crew_recovery():
+        try:
+            await asyncio.sleep(3)
+            await fleet.mark_crew_recovery_complete(body.crew_id)
+        except Exception as e:
+            logger.error(f"Crew recovery clear failed: {e}")
+
+    asyncio.create_task(_clear_crew_recovery())
+
+    return {
+        "status": "crew_reconnected",
+        "crew_id": body.crew_id,
+        "message": (
+            f"AI-Crew {body.crew_id} reconnecting. "
+            f"Temporal replaying — crew will resume delivery."
+        ),
+    }
+
+
+# --- Per-agent disconnect/reconnect ---
+
+
+class AgentDisconnectRequest(BaseModel):
+    agent_name: str = "fleet_agent"
+
+
+@app.post("/api/disconnect-agent")
+async def disconnect_agent(body: AgentDisconnectRequest):
+    """Take a specific agent offline. Other agents compensate."""
+    await fleet.disconnect_agent(body.agent_name)
+
+    # Signal the workflow
+    if _temporal_client is not None:
+        try:
+            handle = _temporal_client.get_workflow_handle("meltdown-demo")
+            await handle.signal(
+                MeltdownDemoWorkflow.agent_disconnected,
+                AgentDisconnectInput(agent_name=body.agent_name),
+            )
+        except Exception as e:
+            logger.error(f"Failed to signal agent disconnect: {e}")
+
+    return {
+        "status": "agent_disconnected",
+        "agent_name": body.agent_name,
+        "message": f"{body.agent_name} is offline. Other agents will compensate.",
+    }
+
+
+@app.post("/api/reconnect-agent")
+async def reconnect_agent(body: AgentDisconnectRequest):
+    """Bring a specific agent back online."""
+    await fleet.reconnect_agent(body.agent_name)
+
+    # Signal the workflow
+    if _temporal_client is not None:
+        try:
+            handle = _temporal_client.get_workflow_handle("meltdown-demo")
+            await handle.signal(
+                MeltdownDemoWorkflow.agent_reconnected,
+                AgentDisconnectInput(agent_name=body.agent_name),
+            )
+        except Exception as e:
+            logger.error(f"Failed to signal agent reconnect: {e}")
+
+    await fleet.publish_agent_event(
+        body.agent_name,
+        "reconnected",
+        f"{body.agent_name} is back online and ready for reasoning.",
+        summary=f"{body.agent_name} reconnected",
+    )
+
+    return {
+        "status": "agent_reconnected",
+        "agent_name": body.agent_name,
+        "message": f"{body.agent_name} is back online.",
+    }
 
 
 # --- Disruption endpoint ---
