@@ -12,7 +12,9 @@ Each activity is a discrete, retryable unit of work. Activities handle:
 from __future__ import annotations
 
 import asyncio
+import os
 
+import httpx
 from temporalio import activity
 
 from agent_fleet.locations import CREW_ASSIGNMENTS, DELIVERY_DESTINATIONS
@@ -73,6 +75,114 @@ async def tool_publish_agent_event(
     """Publish a reasoning event to the operator UI panel."""
     await fleet.publish_agent_event(agent_name, event_type, content, summary=summary)
     return "Event published."
+
+
+@activity.defn(name="tool_get_route_info")
+async def tool_get_route_info(
+    origin_lat: float,
+    origin_lng: float,
+    destination_lat: float,
+    destination_lng: float,
+    destination_name: str = "",
+) -> str:
+    """Get driving route info between two points using Google Maps Directions API.
+
+    Returns distance, duration, and step-by-step directions.
+    Use this to assess reroute feasibility and ETAs for AI-Crew dispatching.
+
+    Args:
+        origin_lat: Starting latitude
+        origin_lng: Starting longitude
+        destination_lat: Destination latitude
+        destination_lng: Destination longitude
+        destination_name: Human-readable name of the destination (e.g. "MGM Grand")
+    """
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+
+    if not api_key:
+        # Mock fallback — deterministic response for demo
+        return _mock_route_info(
+            origin_lat, origin_lng, destination_lat, destination_lng, destination_name
+        )
+
+    origin = f"{origin_lat},{origin_lng}"
+    destination = f"{destination_lat},{destination_lng}"
+    url = "https://maps.googleapis.com/maps/api/directions/json"
+    params = {
+        "origin": origin,
+        "destination": destination,
+        "key": api_key,
+        "mode": "driving",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+        if data.get("status") != "OK" or not data.get("routes"):
+            activity.logger.warning(f"Maps API status: {data.get('status')}")
+            return _mock_route_info(
+                origin_lat, origin_lng, destination_lat, destination_lng, destination_name
+            )
+
+        route = data["routes"][0]
+        leg = route["legs"][0]
+        distance = leg["distance"]["text"]
+        duration = leg["duration"]["text"]
+
+        steps = []
+        for i, step in enumerate(leg["steps"][:5], 1):
+            instruction = step["html_instructions"]
+            # Strip HTML tags for clean text
+            import re
+
+            instruction = re.sub(r"<[^>]+>", " ", instruction).strip()
+            steps.append(f"  {i}. {instruction} ({step['distance']['text']})")
+
+        dest_label = destination_name or f"({destination_lat:.4f}, {destination_lng:.4f})"
+        steps_text = "\n".join(steps)
+        return (
+            f"Route to {dest_label}:\n"
+            f"  Distance: {distance}\n"
+            f"  ETA: {duration}\n"
+            f"  Key directions:\n{steps_text}"
+        )
+
+    except Exception as e:
+        activity.logger.warning(f"Maps API error, using mock: {e}")
+        return _mock_route_info(
+            origin_lat, origin_lng, destination_lat, destination_lng, destination_name
+        )
+
+
+def _mock_route_info(
+    origin_lat: float,
+    origin_lng: float,
+    dest_lat: float,
+    dest_lng: float,
+    dest_name: str,
+) -> str:
+    """Deterministic mock route info for demo without Maps API key."""
+    import math
+
+    dlat = dest_lat - origin_lat
+    dlng = dest_lng - origin_lng
+    # Rough distance in miles (Las Vegas scale)
+    dist_miles = math.sqrt(dlat**2 + dlng**2) * 69.0
+    eta_minutes = max(3, int(dist_miles * 3.5))
+
+    dest_label = dest_name or f"({dest_lat:.4f}, {dest_lng:.4f})"
+    return (
+        f"Route to {dest_label}:\n"
+        f"  Distance: {dist_miles:.1f} mi\n"
+        f"  ETA: {eta_minutes} mins\n"
+        f"  Key directions:\n"
+        f"    1. Head south on Las Vegas Blvd (0.5 mi)\n"
+        f"    2. Continue on Las Vegas Blvd S ({dist_miles - 0.5:.1f} mi)\n"
+        f"    3. Arrive at {dest_label}"
+    )
 
 
 # --- Core delivery activities ---
@@ -497,6 +607,24 @@ async def resolve_disruption_mock(
         events_published += 1
         await asyncio.sleep(0.4)
 
+        # Simulate Maps API route check
+        route_info = _mock_route_info(
+            backup_crew.position.lat if backup_crew else 36.1280,
+            backup_crew.position.lng if backup_crew else -115.1520,
+            failed_crew.position.lat if failed_crew else 36.1024,
+            failed_crew.position.lng if failed_crew else -115.1696,
+            inp.disruption_crew_id,
+        )
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "tool_call",
+            f"Calling tool_get_route_info to check driving route from "
+            f"{crew_id} to affected delivery area...\n\n{route_info}",
+            summary=f"Checking route from {crew_id}...",
+        )
+        events_published += 1
+        await asyncio.sleep(0.3)
+
         fleet_assessment = (
             f"COOLER FAILURE on {inp.disruption_crew_id} — "
             f"temperature has reached {failed_temp:.0f}F and climbing fast. "
@@ -505,6 +633,8 @@ async def resolve_disruption_mock(
             f"- {crew_id} is the best reroute candidate — "
             f"cooler is nominal, {backup_capacity} capacity slots open, "
             f"and closest to the affected route.\n"
+            f"- Route check confirms {crew_id} can reach the delivery zone "
+            f"via Las Vegas Blvd with a short ETA.\n"
             f"- Other AI-Crews either have cooler issues or lack capacity "
             f"for {len(inp.affected_order_ids)} additional orders.\n\n"
             f"RECOMMENDATION: Immediately reroute all {len(inp.affected_order_ids)} "
@@ -539,6 +669,39 @@ async def resolve_disruption_mock(
             total_servings += order.servings
 
     if customer_online:
+        # Simulate Hotel Researcher sub-agent (google_search)
+        hotel_names = [o.hotel for o in order_details if o]
+        hotel_context_lines = []
+        for hotel in hotel_names:
+            if "MGM" in hotel:
+                hotel_context_lines.append(
+                    f"- {hotel}: Currently hosting a major pool party series "
+                    f"(Wet Republic). High guest volume, VIP catering expectations."
+                )
+            elif "Caesars" in hotel:
+                hotel_context_lines.append(
+                    f"- {hotel}: Banquet halls booked for a corporate gala tonight. "
+                    f"Caesars is known for premium event standards — late delivery "
+                    f"would damage vendor relationship."
+                )
+            elif "Mandalay" in hotel:
+                hotel_context_lines.append(
+                    f"- {hotel}: Tech conference in session at the Convention Center. "
+                    f"Conference catering is time-sensitive — dessert course is scheduled."
+                )
+        hotel_context = "\n".join(hotel_context_lines)
+
+        if hotel_context:
+            await fleet.publish_agent_event(
+                "customer_agent",
+                "tool_call",
+                f"Hotel Researcher (google_search) gathered live context:\n\n"
+                f"{hotel_context}",
+                summary="Hotel research complete — live event context gathered",
+            )
+            events_published += 1
+            await asyncio.sleep(0.3)
+
         await fleet.publish_agent_event(
             "customer_agent",
             "tool_call",
@@ -562,9 +725,13 @@ async def resolve_disruption_mock(
             f"CUSTOMER IMPACT — {total_servings} total servings at risk "
             f"across {len(inp.affected_order_ids)} orders:\n\n"
             f"{orders_text}\n\n"
+        )
+        if hotel_context:
+            customer_assessment += f"HOTEL INTELLIGENCE:\n{hotel_context}\n\n"
+        customer_assessment += (
             f"All affected orders are VIP-tier with tight deadlines. "
-            f"These are high-profile hotel events — MGM pool parties, "
-            f"Caesars banquets. A melted delivery would be a reputation disaster.\n\n"
+            f"These are high-profile hotel events — live event context confirms "
+            f"active VIP gatherings. A melted delivery would be a reputation disaster.\n\n"
             f"RECOMMENDATION: Prioritize fastest possible reroute to {crew_id}. "
             f"Proactively notify hotel event coordinators of the slight delay. "
             f"VIP orders must be delivered first on the backup AI-Crew's route."

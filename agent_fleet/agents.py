@@ -39,9 +39,18 @@ except ImportError:
     TemporalModel = activity_tool = None
     _TEMPORAL_ADK_AVAILABLE = False
 
+try:
+    from google.adk.tools import google_search
+
+    _GOOGLE_SEARCH_AVAILABLE = True
+except ImportError:
+    google_search = None
+    _GOOGLE_SEARCH_AVAILABLE = False
+
 from agent_fleet.activities import (
     tool_get_fleet_status,
     tool_get_order_priorities,
+    tool_get_route_info,
     tool_publish_agent_event,
 )
 
@@ -79,6 +88,15 @@ _publish_event_tool = (
     activity_tool(
         tool_publish_agent_event,
         start_to_close_timeout=timedelta(seconds=10),
+        retry_policy=_TOOL_RETRY,
+    )
+    if _TEMPORAL_ADK_AVAILABLE
+    else None
+)
+_route_info_tool = (
+    activity_tool(
+        tool_get_route_info,
+        start_to_close_timeout=timedelta(seconds=15),
         retry_policy=_TOOL_RETRY,
     )
     if _TEMPORAL_ADK_AVAILABLE
@@ -124,6 +142,10 @@ def create_fleet_agent() -> Agent:
     return Agent(
         name="fleet_agent",
         model=TemporalModel(DEFAULT_MODEL),
+        description=(
+            "Operational fleet specialist. Assesses AI-Crew positions, cooler status, "
+            "capacity, and logistics to recommend optimal rerouting options."
+        ),
         instruction=(
             "You are the Fleet Operations AI for Meltdown Ice Cream Delivery. "
             "You partner with human delivery crews to monitor AI-Crew status, "
@@ -135,14 +157,56 @@ def create_fleet_agent() -> Agent:
             "- What are the cooler conditions across the fleet?\n"
             "- What is the fastest reroute option?\n\n"
             "First call tool_get_fleet_status to check current fleet state. "
-            "Then call tool_publish_agent_event with agent_name='fleet_agent' and "
+            "Then use tool_get_route_info to check driving routes and ETAs "
+            "between AI-Crew positions and delivery destinations. "
+            "Finally call tool_publish_agent_event with agent_name='fleet_agent' and "
             "event_type='assessment' to share your assessment.\n\n"
             "Your response should be a concise operational assessment: "
-            "recommend which AI-Crew should take the rerouted orders and why. "
+            "recommend which AI-Crew should take the rerouted orders and why, "
+            "including route distance and ETA data. "
             "Be opinionated — state your recommendation clearly, but remember "
             "the human operator has final authority."
         ),
-        tools=[_fleet_status_tool, _publish_event_tool],
+        tools=[_fleet_status_tool, _route_info_tool, _publish_event_tool],
+        output_key="fleet_assessment",
+    )
+
+
+def create_hotel_researcher() -> Agent | None:
+    """
+    Hotel Researcher — uses Google Search to gather live context about
+    delivery destination hotels (events, occupancy, VIP considerations).
+
+    Uses google_search as its sole tool (Gemini constraint: google_search
+    cannot be combined with other tools in the same agent).
+
+    Returns None if google_search is not available.
+    """
+    if not _GOOGLE_SEARCH_AVAILABLE or google_search is None:
+        return None
+
+    return Agent(
+        name="hotel_researcher",
+        model=TemporalModel(DEFAULT_MODEL),
+        description=(
+            "Hotel intelligence researcher. Searches for live information about "
+            "Las Vegas hotels involved in deliveries — current events, VIP bookings, "
+            "and anything that affects delivery urgency."
+        ),
+        instruction=(
+            "You are a Hotel Intelligence Researcher for Meltdown Ice Cream Delivery "
+            "on the Las Vegas Strip.\n\n"
+            "Your job is to quickly search for relevant context about the hotels "
+            "involved in the current delivery disruption. Search for:\n"
+            "- Current events at the affected hotels (conferences, pool parties, galas)\n"
+            "- Any VIP or celebrity presence that increases delivery urgency\n"
+            "- Hotel reputation and standards for catering service\n\n"
+            "Be concise. Return 2-3 bullet points per hotel with the most relevant "
+            "findings. Focus on information that would affect delivery priority.\n\n"
+            "Hotels on the Las Vegas Strip: MGM Grand, Caesars Palace, Mandalay Bay."
+        ),
+        tools=[google_search],
+        output_key="hotel_context",
     )
 
 
@@ -156,6 +220,10 @@ def create_customer_agent() -> Agent:
     return Agent(
         name="customer_agent",
         model=TemporalModel(DEFAULT_MODEL),
+        description=(
+            "Customer impact specialist. Evaluates order priorities, VIP deadlines, "
+            "servings at risk, and hotel commitments to protect customer satisfaction."
+        ),
         instruction=(
             "You are the Customer Relations AI for Meltdown Ice Cream Delivery. "
             "You advocate for customer commitments and priorities, providing "
@@ -164,6 +232,9 @@ def create_customer_agent() -> Agent:
             "- Which orders are VIP vs standard?\n"
             "- Which deadlines are at risk?\n"
             "- How many servings (and guests) are affected?\n\n"
+            "You may have hotel context from the Hotel Researcher (in state key "
+            "'hotel_context') — use it to enrich your assessment with real-world "
+            "details about events and VIP presence at the affected hotels.\n\n"
             "First call tool_get_order_priorities to check order details. "
             "Then call tool_publish_agent_event with agent_name='customer_agent' and "
             "event_type='assessment' to share your assessment.\n\n"
@@ -173,6 +244,26 @@ def create_customer_agent() -> Agent:
             "Remember: you recommend, the human operator decides."
         ),
         tools=[_order_priorities_tool, _publish_event_tool],
+        output_key="customer_assessment",
+    )
+
+
+def create_customer_assessment_pipeline() -> SequentialAgent | Agent:
+    """
+    Customer Assessment Pipeline — SequentialAgent that first researches hotels
+    via Google Search, then runs the Customer Agent with enriched context.
+
+    Falls back to standalone Customer Agent if google_search is unavailable.
+    """
+    hotel_researcher = create_hotel_researcher()
+
+    if hotel_researcher is None:
+        # google_search not available — run Customer Agent standalone
+        return create_customer_agent()
+
+    return SequentialAgent(
+        name="customer_assessment",
+        sub_agents=[hotel_researcher, create_customer_agent()],
     )
 
 
@@ -187,6 +278,10 @@ def create_resolver_agent() -> Agent:
     return Agent(
         name="resolver_agent",
         model=TemporalModel(DEFAULT_MODEL),
+        description=(
+            "Resolution coordinator. Synthesizes fleet and customer assessments "
+            "into a concrete recovery plan recommendation for the human operator."
+        ),
         instruction=(
             "You are the Resolution Coordinator for Meltdown Ice Cream Delivery. "
             "You synthesize fleet and customer assessments into actionable "
@@ -223,7 +318,7 @@ def create_disruption_resolver() -> SequentialAgent | None:
 
     parallel_assessment = ParallelAgent(
         name="parallel_assessment",
-        sub_agents=[create_fleet_agent(), create_customer_agent()],
+        sub_agents=[create_fleet_agent(), create_customer_assessment_pipeline()],
     )
 
     resolver = create_resolver_agent()

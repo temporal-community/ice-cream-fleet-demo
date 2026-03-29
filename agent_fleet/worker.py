@@ -39,6 +39,7 @@ from agent_fleet.activities import (
     resolve_disruption_mock,
     tool_get_fleet_status,
     tool_get_order_priorities,
+    tool_get_route_info,
     tool_publish_agent_event,
 )
 from agent_fleet.workflows import CrewRouteWorkflow, MeltdownDemoWorkflow
@@ -78,6 +79,7 @@ async def create_worker(client: Client) -> Worker:
             resolve_disruption_mock,
             tool_get_fleet_status,
             tool_get_order_priorities,
+            tool_get_route_info,
             tool_publish_agent_event,
         ],
     )

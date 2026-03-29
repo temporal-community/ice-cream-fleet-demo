@@ -77,11 +77,15 @@ FAST_RETRY = RetryPolicy(
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=5,
 )
+# Navigation retry: no max attempts — relies on schedule_to_close_timeout
+# as the overall deadline. This prevents disconnect scenarios from exhausting
+# retries before the operator reconnects. In production, activities that may
+# be retried indefinitely (waiting for external recovery) should use
+# schedule_to_close_timeout instead of maximum_attempts.
 NAV_RETRY = RetryPolicy(
-    initial_interval=timedelta(seconds=2),
+    initial_interval=timedelta(seconds=3),
     backoff_coefficient=2.0,
-    maximum_interval=timedelta(seconds=60),
-    maximum_attempts=10,
+    maximum_interval=timedelta(seconds=30),
 )
 
 
@@ -118,6 +122,9 @@ class CrewRouteWorkflow:
         order_ids = [o.order_id for o in orders]
 
         # Step 1: Navigate to kitchen (pickup point)
+        # schedule_to_close_timeout = overall deadline for all retries
+        # start_to_close_timeout = per-attempt timeout
+        # NAV_RETRY has no max_attempts — retries until schedule deadline
         await workflow.execute_activity(
             navigate_to,
             NavigateInput(
@@ -128,6 +135,7 @@ class CrewRouteWorkflow:
                 leg="pickup",
                 steps=2,
             ),
+            schedule_to_close_timeout=timedelta(minutes=10),
             start_to_close_timeout=timedelta(seconds=120),
             heartbeat_timeout=timedelta(seconds=15),
             retry_policy=NAV_RETRY,
@@ -140,6 +148,7 @@ class CrewRouteWorkflow:
         await workflow.execute_activity(
             pickup_orders,
             PickupInput(crew_id=crew_id, order_ids=order_ids),
+            schedule_to_close_timeout=timedelta(minutes=5),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=FAST_RETRY,
         )
@@ -160,6 +169,7 @@ class CrewRouteWorkflow:
                         leg="pickup",
                         steps=5,
                     ),
+                    schedule_to_close_timeout=timedelta(minutes=10),
                     start_to_close_timeout=timedelta(seconds=120),
                     heartbeat_timeout=timedelta(seconds=15),
                     retry_policy=NAV_RETRY,
@@ -182,6 +192,7 @@ class CrewRouteWorkflow:
                     leg="delivery",
                     steps=10,
                 ),
+                schedule_to_close_timeout=timedelta(minutes=10),
                 start_to_close_timeout=timedelta(seconds=120),
                 heartbeat_timeout=timedelta(seconds=15),
                 retry_policy=NAV_RETRY,
@@ -191,6 +202,7 @@ class CrewRouteWorkflow:
             await workflow.execute_activity(
                 deliver_order,
                 DeliverInput(crew_id=crew_id, order_id=order.order_id),
+                schedule_to_close_timeout=timedelta(minutes=5),
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=FAST_RETRY,
             )
@@ -279,10 +291,29 @@ class MeltdownDemoWorkflow:
         self._disconnected_agents.discard(inp.agent_name)
         workflow.logger.info(f"Agent {inp.agent_name} reconnected")
 
+    # --- Queries (read-only state inspection) ---
+
+    @workflow.query
+    def get_status(self) -> dict:
+        """Read-only query for current workflow state. Useful for Temporal UI and debugging."""
+        return {
+            "routes_done": self._routes_done,
+            "disruption_handled": self._disruption_handled,
+            "has_disruption": self._disruption is not None,
+            "pending_changes": len(self._pending_changes),
+            "disconnected_crews": list(self._disconnected_crews),
+            "disconnected_agents": list(self._disconnected_agents),
+            "has_recommendation": self._current_recommendation is not None,
+        }
+
     # --- Main entry ---
 
     @workflow.run
     async def run(self, inp: MeltdownDemoInput) -> str:
+        workflow.logger.info(
+            f"Meltdown demo starting (escalation={inp.escalation_enabled})"
+        )
+
         # Start all crew routes
         route_handles = await self._start_routes()
 
@@ -293,6 +324,7 @@ class MeltdownDemoWorkflow:
 
         # Wait for all routes to complete
         results = await self._await_routes(route_handles)
+        workflow.logger.info(f"All routes complete: {results}")
 
         # Tell the signal loop to stop, then let it drain any
         # signals that arrived just before routes finished
@@ -408,6 +440,10 @@ class MeltdownDemoWorkflow:
         """
         d = self._disruption
         iteration = 1
+        workflow.logger.info(
+            f"Disruption loop starting: crew={d.crew_id}, "
+            f"temp={d.cooler_temp_f}F, orders={d.affected_order_ids}"
+        )
 
         while True:
             # Grab any pending condition updates and clear the queue
@@ -457,14 +493,19 @@ class MeltdownDemoWorkflow:
                 self._operator_decision = None
 
                 if decision.action == "approve":
-                    # Operator approved — execute the plan
+                    workflow.logger.info("Operator approved recovery plan — executing")
                     break
                 else:
-                    # Operator rejected — loop again
+                    workflow.logger.info(
+                        f"Operator rejected plan (notes={decision.notes!r}) — re-resolving"
+                    )
                     iteration += 1
                     continue
 
             # New conditions arrived (no decision yet) — re-resolve
+            workflow.logger.info(
+                f"New conditions received during iteration {iteration} — re-resolving"
+            )
             self._operator_decision = None
             iteration += 1
             continue
