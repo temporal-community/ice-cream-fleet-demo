@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Courier Fleet Demo — ADK + Temporal</title>
+<title>Meltdown — Ice Cream Delivery Fleet</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -15,8 +15,8 @@
     color: #e0e0e0;
     height: 100vh;
     display: grid;
-    grid-template-columns: 1fr 360px;
-    grid-template-rows: 56px 1fr;
+    grid-template-columns: 420px 1fr;
+    grid-template-rows: 56px auto auto 1fr;
   }
 
   /* --- Header --- */
@@ -31,13 +31,15 @@
   }
   header h1 {
     font-size: 18px;
-    font-weight: 600;
+    font-weight: 700;
     color: #fff;
   }
-  header h1 span { color: #6c8cff; }
+  header h1 .accent { color: #f97316; }
+  header h1 .sub { color: #6b7280; font-weight: 400; font-size: 13px; margin-left: 8px; }
   .header-badges {
     display: flex;
     gap: 12px;
+    align-items: center;
   }
   .badge {
     font-size: 11px;
@@ -50,142 +52,431 @@
   .badge-temporal { background: #1e293b; color: #38bdf8; border: 1px solid #38bdf833; }
   .badge-adk { background: #1a2e1a; color: #4ade80; border: 1px solid #4ade8033; }
 
-  /* --- Map --- */
-  #map {
-    background: #1a1d28;
-  }
-
-  /* --- Sidebar --- */
-  .sidebar {
+  /* --- Tab bar + panels --- */
+  .tab-bar {
+    grid-column: 1 / -1;
     background: #161922;
-    border-left: 1px solid #2a2d3a;
-    overflow-y: auto;
-    padding: 16px;
+    border-bottom: 1px solid #2a2d3a;
     display: flex;
-    flex-direction: column;
-    gap: 16px;
+    align-items: stretch;
   }
-
-  /* --- Control buttons --- */
-  .controls {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .btn {
-    padding: 10px 16px;
+  .tab-bar .tab {
+    padding: 10px 24px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6b7280;
+    cursor: pointer;
+    background: #1e2130;
     border: none;
-    border-radius: 8px;
-    font-size: 13px;
+    border-bottom: 3px solid transparent;
+    transition: all 0.15s ease;
+  }
+  .tab-bar .tab:hover { color: #e0e0e0; }
+  .tab-bar .tab.active {
+    color: #f97316;
+    border-bottom-color: #f97316;
+    background: #161922;
+  }
+  .tab-bar .status-area {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+  }
+  .tab-panels {
+    grid-column: 1 / -1;
+    background: #161922;
+    border-bottom: 1px solid #2a2d3a;
+    padding: 8px 24px;
+  }
+  .tab-panel {
+    display: none;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .tab-panel.active { display: flex; }
+
+  .btn {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.15s ease;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
   }
   .btn:active { transform: scale(0.97); }
   .btn-start { background: #22c55e; color: #fff; }
   .btn-start:hover { background: #16a34a; }
-  .btn-kill { background: #ef4444; color: #fff; }
-  .btn-kill:hover { background: #dc2626; }
+  .btn-crash { background: #ef4444; color: #fff; }
+  .btn-crash:hover { background: #dc2626; }
   .btn-restart { background: #3b82f6; color: #fff; }
   .btn-restart:hover { background: #2563eb; }
+  .btn-disrupt { background: #f97316; color: #fff; }
+  .btn-disrupt:hover { background: #ea580c; }
+  .btn-change { background: #a855f7; color: #fff; }
+  .btn-change:hover { background: #9333ea; }
+  .btn-approve { background: #22c55e; color: #fff; font-size: 11px; padding: 4px 10px; }
+  .btn-reject { background: #ef4444; color: #fff; font-size: 11px; padding: 4px 10px; }
   .btn-reset { background: #374151; color: #9ca3af; }
   .btn-reset:hover { background: #4b5563; color: #fff; }
 
-  /* --- Status cards --- */
+  .worker-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .worker-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .worker-indicator.online .worker-dot { background: #22c55e; }
+  .worker-indicator.online { color: #22c55e; }
+  .worker-indicator.offline .worker-dot { background: #ef4444; animation: pulse 1s infinite; }
+  .worker-indicator.offline { color: #ef4444; }
+
+  /* --- Left panel --- */
+  .left-panel {
+    background: #161922;
+    border-right: 1px solid #2a2d3a;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .panel-section {
+    padding: 12px 16px;
+    border-bottom: 1px solid #2a2d3a;
+  }
+
   .section-label {
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1px;
     color: #6b7280;
-    margin-bottom: 4px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
-  .courier-card, .mission-card {
-    background: #1e2130;
+  .section-label::after {
+    content: '\25B4';
+    font-size: 10px;
+    color: #4b5563;
+    transition: transform 0.2s ease;
+  }
+  .panel-section.collapsed .section-label::after {
+    transform: rotate(180deg);
+  }
+  .panel-section.collapsed .section-label {
+    margin-bottom: 0;
+  }
+
+  /* --- Agent reasoning panel --- */
+  .agent-panel {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* Middle sections (couriers/orders) — compact, collapsible */
+  .mid-sections {
+    flex-shrink: 0;
+    max-height: 200px;
+    overflow-y: auto;
+    border-bottom: 1px solid #2a2d3a;
+  }
+
+  /* Event log — pinned at bottom */
+  .event-log-section {
+    flex-shrink: 0;
+    max-height: 150px;
+    overflow: hidden;
+  }
+  .event-log-section .event-log {
+    max-height: 120px;
+  }
+
+  .section-body {
+    transition: max-height 0.3s ease, opacity 0.2s ease;
+    overflow: hidden;
+  }
+  .panel-section.collapsed .section-body {
+    max-height: 0 !important;
+    opacity: 0;
+    overflow: hidden;
+  }
+  .agent-boxes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .agent-box {
     border-radius: 10px;
-    padding: 12px;
     border: 1px solid #2a2d3a;
+    overflow: hidden;
+    transition: border-color 0.3s ease;
   }
-  .courier-card h3, .mission-card h3 {
+  .agent-box.active { border-color: var(--agent-color); }
+  .agent-box-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #1a1d28;
+  }
+  .agent-box-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .agent-box-name {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--agent-color);
+  }
+  .agent-box-role {
+    font-size: 10px;
+    color: #6b7280;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .agent-box-status {
+    margin-left: auto;
+    font-size: 9px;
     font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .agent-box-status.waiting {
+    background: #1e2130;
+    color: #4b5563;
+  }
+  .agent-box-status.thinking {
+    background: #422006;
+    color: #fbbf24;
+    animation: pulse 1.5s infinite;
+  }
+  .agent-box-status.done {
+    background: #052e16;
+    color: #22c55e;
+  }
+  .agent-box-body {
+    padding: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease, padding 0.3s ease;
+  }
+  .agent-box.active .agent-box-body {
+    padding: 8px 12px;
+    max-height: 500px;
+  }
+  .agent-box-entry {
+    font-size: 11px;
+    line-height: 1.5;
+    color: #d1d5db;
+    padding: 6px 0;
+    border-bottom: 1px solid #2a2d3a;
+  }
+  .agent-box-entry:last-child { border-bottom: none; }
+  .agent-box-entry .entry-type {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--agent-color);
+    opacity: 0.7;
+    margin-bottom: 2px;
+  }
+
+  .agent-box.fleet_agent { --agent-color: #38bdf8; }
+  .agent-box.customer_agent { --agent-color: #a855f7; }
+  .agent-box.resolver { --agent-color: #4ade80; }
+
+  /* Phase separator in agent boxes */
+  .phase-separator {
+    text-align: center;
+    padding: 6px 0;
+    margin: 4px 0;
+    border-top: 1px solid #f9731644;
+    border-bottom: 1px solid #f9731644;
+  }
+  .phase-separator span {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: #f97316;
+    background: #1e2130;
+    padding: 0 8px;
+  }
+
+  .phase-separator.reeval {
+    border-top-color: #38bdf844;
+    border-bottom-color: #38bdf844;
+  }
+  .phase-separator.reeval span {
+    color: #38bdf8;
+  }
+
+  .btn-inject { background: #1e3a5f; color: #38bdf8; border: 1px solid #38bdf833; }
+  .btn-inject:hover { background: #1e4a7f; }
+
+  .entry-content.has-summary { cursor: pointer; }
+
+  /* Disruption alert banner */
+  #disruption-alert {
+    display: none;
+    position: fixed;
+    top: 56px;
+    left: 420px;
+    right: 0;
+    background: rgba(249, 115, 22, 0.92);
+    z-index: 999;
+    pointer-events: none;
+    padding: 10px 0;
+    text-align: center;
+    animation: disruption-flash 0.5s ease-out;
+  }
+  #disruption-alert .alert-text {
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+  #disruption-alert .alert-sub {
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(255,255,255,0.85);
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+  }
+  @keyframes disruption-flash {
+    0% { opacity: 0; transform: translateY(-10px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Agent box disruption mode */
+  .agent-box-status.thinking[data-mode="disruption"] {
+    background: #431407;
+    color: #f97316;
+    animation: pulse 1s infinite;
+  }
+
+  .agent-empty {
+    color: #4b5563;
+    font-size: 12px;
+    font-style: italic;
+    padding: 16px;
+    text-align: center;
+  }
+
+  /* --- Order & courier cards --- */
+  .card {
+    background: #1e2130;
+    border-radius: 8px;
+    padding: 10px 12px;
+    border: 1px solid #2a2d3a;
     margin-bottom: 6px;
+  }
+  .card h3 {
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .status-pill {
     display: inline-block;
-    font-size: 10px;
-    padding: 2px 8px;
+    font-size: 9px;
+    padding: 2px 7px;
     border-radius: 10px;
     font-weight: 600;
     text-transform: uppercase;
+    letter-spacing: 0.3px;
   }
   .status-idle { background: #1e293b; color: #94a3b8; }
   .status-en_route_pickup,
   .status-en_route_delivery { background: #172554; color: #60a5fa; }
   .status-picking_up,
   .status-delivering { background: #1a2e1a; color: #4ade80; }
+  .status-returning { background: #422006; color: #fbbf24; }
   .status-failed { background: #450a0a; color: #f87171; animation: pulse 1s infinite; }
   .status-recovered { background: #422006; color: #fbbf24; }
-  .status-completed { background: #052e16; color: #22c55e; }
   .status-pending { background: #1e293b; color: #94a3b8; }
   .status-assigned { background: #172554; color: #60a5fa; }
-  .status-in_progress { background: #172554; color: #60a5fa; }
+  .status-picked_up { background: #1a2e1a; color: #4ade80; }
+  .status-in_transit { background: #172554; color: #60a5fa; }
+  .status-delivered { background: #052e16; color: #22c55e; }
+  .status-at_risk { background: #451a03; color: #f97316; animation: pulse 1s infinite; }
+  .status-rerouted { background: #422006; color: #fbbf24; }
+  .status-cancelled { background: #450a0a; color: #f87171; }
+  .priority-vip { color: #f97316; font-weight: 700; }
+  .priority-standard { color: #6b7280; }
+
+  .detail { font-size: 11px; color: #6b7280; margin-top: 2px; }
+  .cooler-warn { color: #f97316; font-weight: 600; }
+  .cooler-fail { color: #ef4444; font-weight: 600; }
 
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
   }
 
-  .detail { font-size: 11px; color: #9ca3af; margin-top: 4px; }
+  /* --- Map --- */
+  #map { background: #1a1d28; }
 
   /* --- Event log --- */
   .event-log {
-    flex: 1;
-    min-height: 0;
+    max-height: 150px;
     overflow-y: auto;
     font-family: 'SF Mono', 'Fira Code', monospace;
-    font-size: 11px;
+    font-size: 10px;
     color: #6b7280;
     background: #111318;
-    border-radius: 8px;
-    padding: 8px;
+    border-radius: 6px;
+    padding: 6px;
     border: 1px solid #2a2d3a;
   }
   .event-log div {
-    padding: 2px 0;
-    border-bottom: 1px solid #1e2130;
+    padding: 1px 0;
+    border-bottom: 1px solid #1a1d28;
   }
   .event-log .event-time { color: #4b5563; }
-  .event-log .event-msg { color: #9ca3af; }
-
-  /* --- Worker status indicator --- */
-  .worker-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 600;
-  }
-  .worker-status.online { background: #052e16; color: #22c55e; }
-  .worker-status.offline { background: #450a0a; color: #f87171; animation: pulse 1s infinite; }
-  .worker-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: currentColor;
-  }
 
   /* --- Crash banner --- */
   #crash-overlay {
     display: none;
     position: fixed;
     top: 56px;
-    left: 0;
-    right: 360px;
+    left: 420px;
+    right: 0;
     background: rgba(239, 68, 68, 0.92);
     z-index: 1000;
     pointer-events: none;
@@ -204,115 +495,313 @@
     0% { opacity: 0; }
     100% { opacity: 1; }
   }
+
+  /* --- Replay banner --- */
+  #replay-overlay {
+    display: none;
+    position: fixed;
+    top: 56px;
+    left: 420px;
+    right: 0;
+    background: rgba(56, 189, 248, 0.92);
+    z-index: 1001;
+    pointer-events: none;
+    padding: 10px 0;
+    text-align: center;
+    animation: replay-pulse 1.5s ease-in-out infinite;
+  }
+  #replay-overlay .replay-text {
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+  #replay-overlay .replay-sub {
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(255,255,255,0.8);
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+  }
+  @keyframes replay-pulse {
+    0%, 100% { opacity: 0.85; }
+    50% { opacity: 1; }
+  }
+
+  /* --- Agent snippet styles --- */
+  .entry-content {
+    max-height: 2.4em;
+    overflow: hidden;
+    position: relative;
+    cursor: pointer;
+    transition: max-height 0.3s ease;
+  }
+  .entry-content.expanded {
+    max-height: none;
+  }
+  .entry-content:not(.expanded)::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1.2em;
+    background: linear-gradient(transparent, #1e2130);
+    pointer-events: none;
+  }
+  .entry-content.short::after {
+    display: none;
+  }
+  .entry-ellipsis {
+    font-size: 10px;
+    color: var(--agent-color, #6b7280);
+    opacity: 0.6;
+    cursor: pointer;
+    user-select: none;
+  }
+  .entry-content.expanded + .entry-ellipsis {
+    display: none;
+  }
+
+  /* Typing cursor on latest entry */
+  .agent-box-entry.typing .entry-content::after {
+    display: none;
+  }
+  .agent-box-entry.typing .entry-content::before {
+    content: '';
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    background: var(--agent-color, #38bdf8);
+    margin-left: 2px;
+    animation: blink-cursor 0.8s step-end infinite;
+    vertical-align: text-bottom;
+    float: right;
+  }
+  @keyframes blink-cursor {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>Courier Fleet <span>// ADK + Temporal</span></h1>
+  <h1><span class="accent">Meltdown</span> Ice Cream Delivery<span class="sub">Las Vegas Strip</span></h1>
   <div class="header-badges">
     <span class="badge badge-adk">Google ADK</span>
     <span class="badge badge-temporal">Temporal</span>
   </div>
 </header>
 
-<div id="map"></div>
-
-<div class="sidebar">
-  <!-- Worker status -->
-  <div id="worker-status" class="worker-status online">
-    <div class="worker-dot"></div>
-    <span>Service: Online</span>
+<div class="tab-bar">
+  <button class="tab active" data-tab="crash" onclick="switchTab('crash')">Crash Recovery</button>
+  <button class="tab" data-tab="cooler" onclick="switchTab('cooler')">Cooler Malfunction</button>
+  <button class="tab" data-tab="customer" onclick="switchTab('customer')">Customer Change</button>
+  <div class="status-area">
+    <div id="worker-status" class="worker-indicator online">
+      <div class="worker-dot"></div>
+      <span>Service Online</span>
+    </div>
   </div>
-
-  <!-- Controls -->
-  <div class="controls">
-    <button class="btn btn-start" onclick="startMissions()">Launch Deliveries</button>
-    <button class="btn btn-kill" onclick="crashService()">Simulate Service Crash</button>
-    <button class="btn btn-restart" onclick="restartService()">Restart Service</button>
-    <button class="btn btn-reset" onclick="resetDemo()">Reset Demo</button>
+</div>
+<div class="tab-panels">
+  <div class="tab-panel active" id="panel-crash">
+    <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
+    <button class="btn btn-crash" onclick="crashService()">Service Disruption</button>
+    <button class="btn btn-restart" onclick="restartService()">Reconnect</button>
+    <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
   </div>
-
-  <!-- Couriers -->
-  <div class="section-label">Couriers</div>
-  <div id="courier-cards"></div>
-
-  <!-- Missions -->
-  <div class="section-label">Missions</div>
-  <div id="mission-cards"></div>
-
-  <!-- Event log -->
-  <div class="section-label">Event Log</div>
-  <div id="event-log" class="event-log"></div>
+  <div class="tab-panel" id="panel-cooler">
+    <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
+    <button class="btn btn-disrupt" onclick="triggerDisruption()">Trigger Cooler Malfunction</button>
+    <button class="btn btn-inject" id="btn-inject" onclick="injectConditions()" style="display:none;">Inject New Conditions</button>
+    <button class="btn btn-approve" id="btn-operator-approve" onclick="operatorDecision('approve')" style="display:none;">Approve Plan</button>
+    <button class="btn btn-reject" id="btn-operator-reject" onclick="operatorDecision('reject')" style="display:none;">Reject Plan</button>
+    <span id="operator-status" style="font-size:11px;color:#fbbf24;display:none;"></span>
+    <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
+  </div>
+  <div class="tab-panel" id="panel-customer">
+    <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
+    <select id="change-order" style="background:#1e2130;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:5px 8px;font-size:12px;">
+      <option value="order-1">order-1 (MGM Grand)</option>
+      <option value="order-2" selected>order-2 (Caesars Palace)</option>
+      <option value="order-3">order-3 (Mandalay Bay)</option>
+    </select>
+    <select id="change-type" style="background:#1e2130;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:5px 8px;font-size:12px;">
+      <option value="address_change">Address Change</option>
+      <option value="cancel">Cancel Order</option>
+    </select>
+    <button class="btn btn-change" onclick="submitCustomerChange()">Submit Change</button>
+    <span id="change-status" style="font-size:11px;color:#fbbf24;display:none;">Awaiting approval...</span>
+    <button class="btn btn-approve" id="btn-approve" onclick="approveChange(true)" style="display:none;">Approve</button>
+    <button class="btn btn-reject" id="btn-reject" onclick="approveChange(false)" style="display:none;">Reject</button>
+    <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
+  </div>
 </div>
 
+<div class="left-panel">
+  <!-- Agent Reasoning Panel -->
+  <div class="panel-section agent-panel">
+    <div class="section-label">AI-Crew Fleet Intelligence</div>
+    <div id="agent-events" class="agent-boxes">
+      <div class="agent-box fleet_agent" id="agent-box-fleet_agent">
+        <div class="agent-box-header">
+          <div class="agent-box-icon" style="background:#1e3a5f;">F</div>
+          <div>
+            <div class="agent-box-name">Fleet Agent</div>
+            <div class="agent-box-role">Operations &amp; logistics</div>
+          </div>
+          <div class="agent-box-status waiting">Waiting</div>
+        </div>
+        <div class="agent-box-body"></div>
+      </div>
+      <div class="agent-box customer_agent" id="agent-box-customer_agent">
+        <div class="agent-box-header">
+          <div class="agent-box-icon" style="background:#3d1f5e;">C</div>
+          <div>
+            <div class="agent-box-name">Customer Agent</div>
+            <div class="agent-box-role">Priorities &amp; deadlines</div>
+          </div>
+          <div class="agent-box-status waiting">Waiting</div>
+        </div>
+        <div class="agent-box-body"></div>
+      </div>
+      <div class="agent-box resolver" id="agent-box-resolver">
+        <div class="agent-box-header">
+          <div class="agent-box-icon" style="background:#1a3a1a;">R</div>
+          <div>
+            <div class="agent-box-name">Resolver</div>
+            <div class="agent-box-role">Synthesize &amp; recommend</div>
+          </div>
+          <div class="agent-box-status waiting">Waiting</div>
+        </div>
+        <div class="agent-box-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Couriers + Orders (middle, compact) -->
+  <div class="mid-sections">
+    <div class="panel-section collapsed" id="section-couriers">
+      <div class="section-label" onclick="toggleSection('section-couriers')">AI-Crews</div>
+      <div class="section-body">
+        <div id="crew-cards"></div>
+      </div>
+    </div>
+    <div class="panel-section collapsed" id="section-orders">
+      <div class="section-label" onclick="toggleSection('section-orders')">Orders</div>
+      <div class="section-body">
+        <div id="order-cards"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Event Log (pinned bottom) -->
+  <div class="panel-section event-log-section" id="section-events">
+    <div class="section-label" onclick="toggleSection('section-events')">Event Log</div>
+    <div class="section-body">
+      <div id="event-log" class="event-log"></div>
+    </div>
+  </div>
+</div>
+
+<div id="map"></div>
+
 <div id="crash-overlay">
-  <div class="crash-text">Service Crashed — Activities Frozen, Awaiting Retry</div>
+  <div class="crash-text">Service Crashed — Deliveries Frozen, Awaiting Recovery</div>
+</div>
+
+<div id="disruption-alert">
+  <div class="alert-text">Cooler Malfunction Detected</div>
+  <div class="alert-sub">Agents coordinating emergency response...</div>
+</div>
+
+<div id="replay-overlay">
+  <div class="replay-text">Replaying...</div>
+  <div class="replay-sub">Restoring workflow state from durable history</div>
 </div>
 
 <script>
-// --- Map setup (SF centered) ---
+// --- Collapsible sections ---
+function toggleSection(id) {
+  document.getElementById(id).classList.toggle('collapsed');
+}
+
+// --- Tab switching ---
+function switchTab(tabName) {
+  document.querySelectorAll('.tab-bar .tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${tabName}`));
+}
+
+// --- Map setup (Las Vegas Strip) ---
 const map = L.map('map', {
   zoomControl: false,
   attributionControl: false,
-}).setView([37.776, -122.457], 13);
+}).setView([36.1150, -115.1728], 14);
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   maxZoom: 19,
 }).addTo(map);
 
 // --- Courier icons ---
-function courierIcon(color) {
+function crewIcon(color, hasAlert) {
+  const alertRing = hasAlert
+    ? `<circle cx="16" cy="16" r="14" fill="none" stroke="#ef4444" stroke-width="2" opacity="0.8"><animate attributeName="r" from="14" to="18" dur="1s" repeatCount="indefinite"/><animate attributeName="opacity" from="0.8" to="0" dur="1s" repeatCount="indefinite"/></circle>`
+    : '';
   return L.divIcon({
-    className: 'courier-marker',
-    html: `<svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-      <circle cx="16" cy="16" r="12" fill="${color}" opacity="0.2"/>
-      <circle cx="16" cy="16" r="6" fill="${color}"/>
-      <circle cx="16" cy="16" r="3" fill="#fff"/>
+    className: 'crew-marker',
+    html: `<svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+      ${alertRing}
+      <circle cx="18" cy="18" r="10" fill="${color}" opacity="0.25"/>
+      <circle cx="18" cy="18" r="5" fill="${color}"/>
+      <circle cx="18" cy="18" r="2" fill="#fff"/>
     </svg>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
   });
 }
 
-const COURIER_COLORS = {
+const CREW_COLORS = {
   idle: '#94a3b8',
   en_route_pickup: '#60a5fa',
   picking_up: '#60a5fa',
   en_route_delivery: '#3b82f6',
   delivering: '#22c55e',
-  returning: '#a78bfa',
+  returning: '#fbbf24',
   failed: '#ef4444',
   recovered: '#fbbf24',
 };
 
-// Locations loaded from server
+// --- Load locations ---
 let DESTINATIONS = {};
 async function loadLocations() {
   const res = await fetch('/api/locations');
   const data = await res.json();
 
+  // Kitchen marker
   L.circleMarker([data.warehouse.lat, data.warehouse.lng], {
-    radius: 8, fillColor: '#fbbf24', color: '#fbbf24', fillOpacity: 0.3, weight: 2,
-  }).addTo(map).bindTooltip(data.warehouse.label, { permanent: true, direction: 'top' });
+    radius: 10, fillColor: '#fbbf24', color: '#fbbf24', fillOpacity: 0.3, weight: 2,
+  }).addTo(map).bindTooltip(data.warehouse.label, {
+    permanent: true, direction: 'top', className: 'map-label',
+  });
 
-  const seen = new Set();
-  Object.entries(data.destinations).forEach(([mid, d]) => {
-    DESTINATIONS[mid] = d;
-    const key = `${d.lat},${d.lng}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      L.circleMarker([d.lat, d.lng], {
-        radius: 6, fillColor: '#4ade80', color: '#4ade80', fillOpacity: 0.3, weight: 2,
-      }).addTo(map).bindTooltip(d.label, { permanent: true, direction: 'top' });
-    }
+  // Hotel markers
+  Object.entries(data.destinations).forEach(([oid, d]) => {
+    DESTINATIONS[oid] = d;
+    L.circleMarker([d.lat, d.lng], {
+      radius: 7, fillColor: '#f97316', color: '#f97316', fillOpacity: 0.3, weight: 2,
+    }).addTo(map).bindTooltip(d.label, {
+      permanent: true, direction: 'top', className: 'map-label',
+    });
   });
 }
 loadLocations();
 
 // --- State tracking ---
-const courierMarkers = {};
-const courierTrails = {};
+const crewMarkers = {};
+const crewTrails = {};
 let workerOnline = true;
 
 // --- WebSocket ---
@@ -322,106 +811,463 @@ function connectWS() {
   ws = new WebSocket(`${protocol}//${location.host}/ws`);
   ws.onmessage = (e) => {
     const state = JSON.parse(e.data);
-    updateCouriers(state.couriers);
-    updateMissions(state.missions);
+    updateCrews(state.crews);
+    updateOrders(state.orders);
+    updateAgentEvents(state.agent_events);
     updateEventLog(state.event_log);
+    updateRecoveryOverlay(state.recovery);
+    updateDisruptionAlert(state.crews, state.orders);
   };
   ws.onclose = () => setTimeout(connectWS, 1000);
 }
 connectWS();
 
-// --- Update couriers on map ---
-function updateCouriers(couriers) {
-  Object.values(couriers).forEach(c => {
+// --- Update couriers ---
+function updateCrews(crews) {
+  Object.values(crews).forEach(c => {
     const pos = [c.position.lat, c.position.lng];
-    const color = COURIER_COLORS[c.status] || '#94a3b8';
+    const color = CREW_COLORS[c.status] || '#94a3b8';
+    const hasAlert = c.cooler_status === 'malfunction' || c.cooler_status === 'failed';
 
-    if (!courierMarkers[c.courier_id]) {
-      courierMarkers[c.courier_id] = L.marker(pos, { icon: courierIcon(color) }).addTo(map);
-      courierMarkers[c.courier_id].bindTooltip(c.courier_id, { direction: 'top', offset: [0, -16] });
-      courierTrails[c.courier_id] = L.polyline([], { color: color, weight: 2, opacity: 0.4, dashArray: '4 6' }).addTo(map);
+    if (!crewMarkers[c.crew_id]) {
+      crewMarkers[c.crew_id] = L.marker(pos, { icon: crewIcon(color, hasAlert) }).addTo(map);
+      crewMarkers[c.crew_id].bindTooltip(c.crew_id, { direction: 'top', offset: [0, -18] });
+      crewTrails[c.crew_id] = L.polyline([], {
+        color, weight: 2, opacity: 0.4, dashArray: '4 6',
+      }).addTo(map);
     } else {
-      courierMarkers[c.courier_id].setLatLng(pos);
-      courierMarkers[c.courier_id].setIcon(courierIcon(color));
+      crewMarkers[c.crew_id].setLatLng(pos);
+      crewMarkers[c.crew_id].setIcon(crewIcon(color, hasAlert));
     }
 
-    // Update trail
     if (c.path_history && c.path_history.length > 0) {
-      const trail = c.path_history.map(p => [p.lat, p.lng]);
-      courierTrails[c.courier_id].setLatLngs(trail);
-      courierTrails[c.courier_id].setStyle({ color: color });
+      crewTrails[c.crew_id].setLatLngs(c.path_history.map(p => [p.lat, p.lng]));
+      crewTrails[c.crew_id].setStyle({ color });
     }
   });
 
-  // Update sidebar cards
-  const container = document.getElementById('courier-cards');
-  container.innerHTML = Object.values(couriers).map(c => `
-    <div class="courier-card" style="margin-bottom: 8px;">
-      <h3>${c.courier_id}</h3>
-      <span class="status-pill status-${c.status}">${c.status.replace(/_/g, ' ')}</span>
-      <div class="detail">Battery: ${c.battery_pct.toFixed(0)}% &middot; Mission: ${c.current_mission_id || 'none'}</div>
-    </div>
-  `).join('');
+  // Sidebar cards
+  const container = document.getElementById('crew-cards');
+  container.innerHTML = Object.values(crews).map(c => {
+    const orders = c.current_orders.length > 0 ? c.current_orders.join(', ') : 'none';
+    let coolerHtml = '';
+    if (c.cooler_status === 'malfunction') {
+      coolerHtml = `<span class="cooler-warn">Cooler: ${c.cooler_temp_f.toFixed(0)}F MALFUNCTION</span>`;
+    } else if (c.cooler_status === 'failed') {
+      coolerHtml = `<span class="cooler-fail">Cooler: FAILED</span>`;
+    }
+    return `
+      <div class="card">
+        <h3>${c.crew_id} <span class="status-pill status-${c.status}">${c.status.replace(/_/g, ' ')}</span></h3>
+        <div class="detail">Orders: ${orders}</div>
+        ${coolerHtml ? `<div class="detail">${coolerHtml}</div>` : ''}
+      </div>
+    `;
+  }).join('');
 }
 
-// --- Update mission cards ---
-function updateMissions(missions) {
-  const container = document.getElementById('mission-cards');
-  container.innerHTML = Object.values(missions).map(m => `
-    <div class="mission-card" style="margin-bottom: 8px;">
-      <h3>${m.order_label}</h3>
-      <span class="status-pill status-${m.status}">${m.status.replace(/_/g, ' ')}</span>
-      <div class="detail">Courier: ${m.assigned_courier_id || 'unassigned'}</div>
-      <div class="detail">${m.status_log.length > 0 ? m.status_log[m.status_log.length - 1] : ''}</div>
-    </div>
-  `).join('');
+// --- Update orders ---
+function updateOrders(orders) {
+  const container = document.getElementById('order-cards');
+  container.innerHTML = Object.values(orders).map(o => {
+    const priorityClass = o.priority === 'vip' ? 'priority-vip' : 'priority-standard';
+    const lastLog = o.status_log.length > 0 ? o.status_log[o.status_log.length - 1] : '';
+    return `
+      <div class="card">
+        <h3>
+          <span class="${priorityClass}">${o.priority.toUpperCase()}</span>
+          ${o.hotel}
+          <span class="status-pill status-${o.status}">${o.status.replace(/_/g, ' ')}</span>
+        </h3>
+        <div class="detail">${o.label} &middot; ${o.servings} servings</div>
+        <div class="detail">AI-Crew: ${o.assigned_crew_id || 'unassigned'} &middot; Deadline: ${o.deadline_minutes}min</div>
+        ${lastLog ? `<div class="detail" style="color: #9ca3af;">${lastLog}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+// --- Update agent events ---
+const AGENT_IDS = ['fleet_agent', 'customer_agent', 'resolver'];
+let prevEventCounts = { fleet_agent: 0, customer_agent: 0, resolver: 0 };
+let prevTotalCount = 0;
+
+const SNIPPET_LEN = 120;
+
+// Detect phases: events with "COOLER FAILURE" or "DISRUPTION" mark the start of disruption phase
+function detectPhase(events) {
+  let disruptionStartIdx = -1;
+  for (let i = 0; i < events.length; i++) {
+    const c = events[i].content.toUpperCase();
+    if (c.includes('COOLER FAILURE') || c.includes('DISRUPTION DETECTED') || c.includes('COOLER MALFUNCTION')) {
+      disruptionStartIdx = i;
+      break;
+    }
+  }
+  return disruptionStartIdx;
+}
+
+function updateAgentEvents(events) {
+  if (!events) return;
+
+  const totalCount = events.length;
+
+  // Group events by agent
+  const grouped = { fleet_agent: [], customer_agent: [], resolver: [] };
+  events.forEach(e => {
+    if (grouped[e.agent_name]) grouped[e.agent_name].push(e);
+  });
+
+  // Detect if we're in disruption phase — new events still arriving after disruption marker
+  const disruptionIdx = detectPhase(events);
+  const inDisruptionPhase = disruptionIdx >= 0;
+
+  // Are events still arriving? (count changed since last update)
+  const stillReceiving = totalCount > prevTotalCount;
+
+  // Find the latest resolver event that's a "plan" type — marks phase completion
+  const resolverEvents = grouped.resolver;
+  const latestResolverPlan = resolverEvents.filter(e => e.event_type === 'plan');
+
+  // Count plans to know which phase is complete
+  // Phase 1 (coordination): first plan event
+  // Phase 2 (disruption): second plan event
+  const planCount = latestResolverPlan.length;
+  const coordinationComplete = planCount >= 1;
+  const disruptionComplete = planCount >= 2;
+
+  // Determine if agents are actively reasoning right now
+  const isActivelyReasoning = stillReceiving && (
+    (inDisruptionPhase && !disruptionComplete) ||
+    (!inDisruptionPhase && !coordinationComplete)
+  );
+
+  AGENT_IDS.forEach(agentId => {
+    const box = document.getElementById(`agent-box-${agentId}`);
+    const body = box.querySelector('.agent-box-body');
+    const statusEl = box.querySelector('.agent-box-status');
+    const agentEvents = grouped[agentId];
+
+    if (agentEvents.length === 0) {
+      box.classList.remove('active');
+      statusEl.className = 'agent-box-status waiting';
+      statusEl.textContent = 'Waiting';
+      body.innerHTML = '';
+      prevEventCounts[agentId] = 0;
+      return;
+    }
+
+    box.classList.add('active');
+
+    // Status: reasoning if events are still arriving and current phase isn't done
+    const agentHasNewEvents = agentEvents.length > prevEventCounts[agentId];
+    const isThinking = isActivelyReasoning || agentHasNewEvents;
+
+    if (isThinking) {
+      statusEl.className = 'agent-box-status thinking';
+      statusEl.textContent = inDisruptionPhase ? 'Disruption' : 'Reasoning';
+    } else {
+      statusEl.className = 'agent-box-status done';
+      statusEl.textContent = 'Complete';
+    }
+
+    // Only re-render if event count changed
+    if (agentEvents.length !== prevEventCounts[agentId]) {
+      // Insert phase separator if there's a disruption phase
+      let html = '';
+      let passedDisruption = false;
+
+      agentEvents.forEach((e, idx) => {
+        // Check if this event is the start of disruption content for this agent
+        if (!passedDisruption && inDisruptionPhase) {
+          const c = e.content.toUpperCase();
+          if (c.includes('COOLER FAILURE') || c.includes('COOLER MALFUNCTION') || c.includes('CUSTOMER IMPACT')) {
+            passedDisruption = true;
+            html += `<div class="phase-separator"><span>DISRUPTION RESPONSE</span></div>`;
+          }
+        }
+
+        const isLast = idx === agentEvents.length - 1;
+        const full = e.content;
+        const summary = e.summary || '';
+        const displayText = summary || full;
+        const isLong = full.length > SNIPPET_LEN;
+        const hasSummary = summary.length > 0;
+        const snippet = hasSummary ? summary : (isLong ? full.substring(0, SNIPPET_LEN) + '...' : full);
+        const encoded = encodeURIComponent(full);
+        const typingClass = (isLast && isThinking) ? ' typing' : '';
+        const shortClass = (!isLong && !hasSummary) ? ' short' : '';
+        const isReeval = full.toUpperCase().includes('RE-EVALUATING') || full.toUpperCase().includes('ITERATION');
+        if (isReeval && idx > 0) {
+          html += `<div class="phase-separator reeval"><span>RE-EVALUATING — new information</span></div>`;
+        }
+        html += `
+          <div class="agent-box-entry${typingClass}">
+            <div class="entry-type">${e.event_type}</div>
+            <div class="entry-content${shortClass}${hasSummary ? ' has-summary' : ''}" data-full="${encoded}" onclick="toggleEntry(this)">
+              ${snippet.replace(/\n/g, '<br>')}
+            </div>
+            ${(isLong || hasSummary) ? '<div class="entry-ellipsis" onclick="toggleEntry(this.previousElementSibling)">click to expand</div>' : ''}
+          </div>
+        `;
+        // Show approve/reject buttons when resolver emits a "plan" event
+        if (e.agent_name === 'resolver' && e.event_type === 'plan' && isLast) {
+          const approveBtn = document.getElementById('btn-operator-approve');
+          const rejectBtn = document.getElementById('btn-operator-reject');
+          const statusEl = document.getElementById('operator-status');
+          if (approveBtn) approveBtn.style.display = 'inline-block';
+          if (rejectBtn) rejectBtn.style.display = 'inline-block';
+          if (statusEl) { statusEl.style.display = 'inline'; statusEl.textContent = 'Recommendation pending — awaiting approval'; }
+        }
+      });
+
+      body.innerHTML = html;
+      body.scrollTop = body.scrollHeight;
+    }
+
+    prevEventCounts[agentId] = agentEvents.length;
+  });
+
+  prevTotalCount = totalCount;
+}
+
+function toggleEntry(el) {
+  if (!el || !el.classList.contains('entry-content')) return;
+  if (el.classList.contains('expanded')) {
+    // Collapse: show snippet
+    el.classList.remove('expanded');
+    const full = decodeURIComponent(el.dataset.full);
+    const snippet = full.substring(0, SNIPPET_LEN) + '...';
+    el.innerHTML = snippet.replace(/\n/g, '<br>');
+  } else {
+    // Expand: show full content
+    el.classList.add('expanded');
+    const full = decodeURIComponent(el.dataset.full);
+    el.innerHTML = full.replace(/\n/g, '<br>');
+  }
 }
 
 // --- Update event log ---
 function updateEventLog(events) {
   const container = document.getElementById('event-log');
-  container.innerHTML = events.slice().reverse().map(e => {
+  container.innerHTML = events.slice().reverse().slice(0, 50).map(e => {
     const t = new Date(e.t * 1000).toLocaleTimeString();
-    return `<div><span class="event-time">${t}</span> <span class="event-msg">${e.msg}</span></div>`;
+    const isReplay = e.msg && e.msg.includes('[REPLAY]');
+    const style = isReplay ? ' style="color: #38bdf8; font-weight: 600;"' : '';
+    return `<div${style}><span class="event-time">${t}</span> ${e.msg}</div>`;
   }).join('');
 }
 
-// --- API calls ---
-async function api(endpoint, method = 'POST') {
-  const res = await fetch(`/api/${endpoint}`, { method });
+// --- Disruption alert ---
+let disruptionAlertShown = false;
+let disruptionResolved = false;
+
+function updateDisruptionAlert(crews, orders) {
+  const alertEl = document.getElementById('disruption-alert');
+
+  // Detect malfunction
+  const malfunctionCrew = Object.values(crews).find(
+    c => c.cooler_status === 'malfunction' || c.cooler_status === 'failed'
+  );
+
+  // Detect if orders have been rerouted (recovery complete)
+  const hasRerouted = Object.values(orders).some(o => o.status === 'rerouted');
+
+  if (malfunctionCrew && !disruptionAlertShown) {
+    disruptionAlertShown = true;
+    alertEl.querySelector('.alert-sub').textContent =
+      `${malfunctionCrew.crew_id} cooler at ${malfunctionCrew.cooler_temp_f.toFixed(0)}F — Agents coordinating emergency response...`;
+    alertEl.style.display = 'block';
+
+    // Auto-expand crews section so audience can see the malfunction
+    const crewSection = document.getElementById('section-couriers');
+    if (crewSection.classList.contains('collapsed')) {
+      crewSection.classList.remove('collapsed');
+    }
+
+    // Show operator controls
+    document.getElementById('btn-inject').style.display = 'inline-block';
+  }
+
+  if (hasRerouted && !disruptionResolved) {
+    disruptionResolved = true;
+    alertEl.querySelector('.alert-text').textContent = 'Recovery Complete';
+    alertEl.querySelector('.alert-sub').textContent = 'Orders rerouted — backup AI-Crew en route';
+    alertEl.style.background = 'rgba(34, 197, 94, 0.92)';
+    // Fade out after 4s
+    setTimeout(() => { alertEl.style.display = 'none'; }, 4000);
+  }
+}
+
+// --- Recovery overlay (driven by WebSocket state) ---
+function updateRecoveryOverlay(recovery) {
+  if (!recovery) return;
+  const replayEl = document.getElementById('replay-overlay');
+  const crashEl = document.getElementById('crash-overlay');
+  if (recovery.phase) {
+    // Replaying: show blue overlay, hide red crash overlay
+    crashEl.style.display = 'none';
+    replayEl.style.display = 'block';
+    // Also update worker status to show replaying
+    const wsEl = document.getElementById('worker-status');
+    wsEl.className = 'worker-indicator online';
+    wsEl.innerHTML = '<div class="worker-dot"></div><span>Replaying...</span>';
+  } else {
+    replayEl.style.display = 'none';
+    // Restore worker status to Online after replay completes
+    const wsEl = document.getElementById('worker-status');
+    if (wsEl.innerHTML.includes('Replaying')) {
+      wsEl.className = 'worker-indicator online';
+      wsEl.innerHTML = '<div class="worker-dot"></div><span>Online</span>';
+    }
+  }
+}
+
+// --- API helpers ---
+async function api(endpoint, method = 'POST', body = null) {
+  const opts = { method };
+  if (body) {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(`/api/${endpoint}`, opts);
   return res.json();
 }
 
-async function startMissions() {
+async function startDemo() {
   const result = await api('start');
   console.log('Started:', result);
 }
 
 async function crashService() {
   workerOnline = false;
-  document.getElementById('worker-status').className = 'worker-status offline';
-  document.getElementById('worker-status').innerHTML = '<div class="worker-dot"></div><span>Service: OFFLINE</span>';
+  const el = document.getElementById('worker-status');
+  el.className = 'worker-indicator offline';
+  el.innerHTML = '<div class="worker-dot"></div><span>Service OFFLINE</span>';
   document.getElementById('crash-overlay').style.display = 'block';
-  const result = await api('stop-worker');
+  const result = await api('crash-service');
   console.log('Crashed:', result);
 }
 
 async function restartService() {
-  const result = await api('restart-worker');
+  const result = await api('restart-service');
   workerOnline = true;
-  document.getElementById('worker-status').className = 'worker-status online';
-  document.getElementById('worker-status').innerHTML = '<div class="worker-dot"></div><span>Service: Online</span>';
-  document.getElementById('crash-overlay').style.display = 'none';
+  // Don't hide crash overlay here — WebSocket state drives the transition
+  // via updateRecoveryOverlay: crash(red) -> replay(blue) -> normal
   console.log('Restarted:', result);
 }
 
+async function triggerDisruption() {
+  const result = await api('trigger-disruption', 'POST', {
+    crew_id: 'ai-crew-1',
+    at_nav_step: 5,
+  });
+  console.log('Disruption armed:', result);
+}
+
+async function submitCustomerChange() {
+  const orderId = document.getElementById('change-order').value;
+  const changeType = document.getElementById('change-type').value;
+
+  let body = { order_id: orderId, change_type: changeType };
+  if (changeType === 'address_change') {
+    // Demo: move delivery to Cosmopolitan
+    body.new_details = `Customer wants ${orderId} delivery moved to a new location`;
+    body.new_lat = 36.1098;
+    body.new_lng = -115.1743;
+  } else {
+    body.new_details = `Customer wants to cancel ${orderId}`;
+  }
+
+  const result = await api('customer-change', 'POST', body);
+  console.log('Customer change submitted:', result);
+
+  // Show approval UI
+  document.getElementById('change-status').style.display = 'inline';
+  document.getElementById('change-status').textContent =
+    `${changeType === 'cancel' ? 'Cancel' : 'Address change'} for ${orderId} — awaiting approval...`;
+  document.getElementById('btn-approve').style.display = 'inline-block';
+  document.getElementById('btn-reject').style.display = 'inline-block';
+}
+
+async function approveChange(approved) {
+  const result = await api('approve-change', 'POST', { approved });
+  console.log('Change decision:', result);
+
+  // Update status
+  const statusEl = document.getElementById('change-status');
+  statusEl.textContent = approved ? 'Change approved' : 'Change rejected';
+  statusEl.style.color = approved ? '#22c55e' : '#ef4444';
+  document.getElementById('btn-approve').style.display = 'none';
+  document.getElementById('btn-reject').style.display = 'none';
+
+  // Clear after 3s
+  setTimeout(() => {
+    statusEl.style.display = 'none';
+    statusEl.style.color = '#fbbf24';
+  }, 3000);
+}
+
+async function operatorDecision(action) {
+  const result = await api('operator-decision', 'POST', { action });
+  console.log('Operator decision:', result);
+  const statusEl = document.getElementById('operator-status');
+  statusEl.textContent = action === 'approve' ? 'Plan approved — executing recovery' : 'Plan rejected — agents re-evaluating';
+  statusEl.style.color = action === 'approve' ? '#22c55e' : '#ef4444';
+  document.getElementById('btn-operator-approve').style.display = 'none';
+  document.getElementById('btn-operator-reject').style.display = 'none';
+  if (action === 'approve') {
+    document.getElementById('btn-inject').style.display = 'none';
+    setTimeout(() => { statusEl.style.display = 'none'; }, 3000);
+  }
+}
+
+async function injectConditions() {
+  const result = await api('inject-conditions', 'POST', {
+    description: 'Traffic delay on Las Vegas Blvd — AI-Crew 2 detoured 10 minutes',
+    crew_id: 'ai-crew-2',
+    details: 'Heavy traffic near Caesars Palace',
+  });
+  console.log('Conditions injected:', result);
+  const statusEl = document.getElementById('operator-status');
+  statusEl.style.display = 'inline';
+  statusEl.textContent = 'New conditions injected — agents re-evaluating...';
+  statusEl.style.color = '#fbbf24';
+  document.getElementById('btn-operator-approve').style.display = 'none';
+  document.getElementById('btn-operator-reject').style.display = 'none';
+}
+
 async function resetDemo() {
-  // Clear map trails
-  Object.values(courierTrails).forEach(t => t.setLatLngs([]));
+  Object.values(crewTrails).forEach(t => t.setLatLngs([]));
   const result = await api('reset');
   document.getElementById('crash-overlay').style.display = 'none';
-  document.getElementById('worker-status').className = 'worker-status online';
-  document.getElementById('worker-status').innerHTML = '<div class="worker-dot"></div><span>Service: Online</span>';
+  document.getElementById('replay-overlay').style.display = 'none';
+  const disruptEl = document.getElementById('disruption-alert');
+  disruptEl.style.display = 'none';
+  disruptEl.style.background = 'rgba(249, 115, 22, 0.92)';
+  disruptEl.querySelector('.alert-text').textContent = 'Cooler Malfunction Detected';
+  disruptionAlertShown = false;
+  disruptionResolved = false;
+  // Reset operator controls
+  document.getElementById('btn-inject').style.display = 'none';
+  document.getElementById('btn-operator-approve').style.display = 'none';
+  document.getElementById('btn-operator-reject').style.display = 'none';
+  const opStatus = document.getElementById('operator-status');
+  opStatus.style.display = 'none';
+  opStatus.style.color = '#fbbf24';
+  const el = document.getElementById('worker-status');
+  el.className = 'worker-indicator online';
+  el.innerHTML = '<div class="worker-dot"></div><span>Service Online</span>';
+  // Reset agent boxes
+  AGENT_IDS.forEach(agentId => {
+    const box = document.getElementById(`agent-box-${agentId}`);
+    box.classList.remove('active');
+    box.querySelector('.agent-box-status').className = 'agent-box-status waiting';
+    box.querySelector('.agent-box-status').textContent = 'Waiting';
+    box.querySelector('.agent-box-body').innerHTML = '';
+  });
+  prevEventCounts = { fleet_agent: 0, customer_agent: 0, resolver: 0 };
+  prevTotalCount = 0;
   console.log('Reset:', result);
 }
 </script>

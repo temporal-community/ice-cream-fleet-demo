@@ -1,8 +1,20 @@
-# Drone Fleet Demo — Google ADK + Temporal
+<p align="center">
+  <img src="https://github.com/google/adk-docs/raw/main/docs/assets/agent-development-kit.png" alt="Google Agent Development Kit" width="600">
+</p>
 
-A 2-3 minute demo showing AI agent orchestration (Google ADK) with durable
-execution (Temporal). Two delivery drones fly packages across San Francisco.
-Kill the worker mid-flight — Temporal recovers and the delivery completes.
+# Meltdown — Ice Cream Delivery Fleet Demo
+
+A conference demo showing **Google ADK** multi-agent reasoning with **Temporal** durable execution, visualized as an ice cream delivery fleet on the Las Vegas Strip.
+
+Three AI-Crews deliver VIP ice cream orders to hotels on the Strip. When things go wrong — cooler malfunctions, service crashes, customer changes — AI agents coordinate the response while Temporal ensures nothing is lost.
+
+## What It Demonstrates
+
+| Scenario | What Happens | What It Shows |
+|----------|-------------|---------------|
+| **Crash Recovery** | Kill the worker mid-delivery, restart it | Temporal replays workflow history — AI-Crews resume from exact position |
+| **Cooler Malfunction** | Trigger a cooler failure on an AI-Crew | Fleet Agent + Customer Agent assess in parallel, Resolver synthesizes a recovery plan |
+| **Customer Change** | Submit an address change or cancellation | Human-in-the-loop approval with agent reasoning |
 
 ## Architecture
 
@@ -15,19 +27,19 @@ Kill the worker mid-flight — Temporal recovers and the delivery completes.
 ┌──────────▼───────────────────────┐
 │       Temporal Worker            │
 │  ┌─────────────────────────────┐ │
-│  │  FleetDispatchWorkflow      │ │
-│  │    └─ DeliveryMissionWF x2  │ │
-│  │        ├─ assign_drone()    │ │
+│  │  MeltdownDemoWorkflow       │ │
+│  │    └─ CrewRouteWF x3     │ │
 │  │        ├─ navigate_to()  ←──┼─┼── heartbeats every step
-│  │        ├─ pickup_package()  │ │
-│  │        ├─ navigate_to()  ←──┼─┼── THIS is where we kill it
-│  │        └─ deliver_package() │ │
+│  │        ├─ pickup_orders()   │ │
+│  │        └─ deliver_order()   │ │
 │  └─────────────────────────────┘ │
 │  ┌─────────────────────────────┐ │
-│  │  ADK Agents                 │ │
-│  │  ├─ DispatchAgent (LLM)     │ │
-│  │  └─ DroneAgent (LLM)        │ │
+│  │  ADK Agents (via Temporal)  │ │
+│  │  ├─ FleetAgent      ──┐    │ │
+│  │  ├─ CustomerAgent   ──┤    │ │  ParallelAgent
+│  │  └─ ResolverAgent  ←──┘    │ │  SequentialAgent
 │  │      model=TemporalModel()  │ │
+│  │      tools=activity_tool()  │ │
 │  └─────────────────────────────┘ │
 └──────────────────────────────────┘
            │
@@ -37,11 +49,13 @@ Kill the worker mid-flight — Temporal recovers and the delivery completes.
 └──────────────────────────────────┘
 ```
 
+**Key integration**: ADK agents run inline in the workflow. Every LLM call goes through `TemporalModel` (activity), every tool call goes through `activity_tool` (activity). If the worker crashes mid-reasoning, Temporal replays the activities from history — the agent resumes without re-calling the LLM.
+
 ## Prerequisites
 
 - Python 3.11+
-- Temporal CLI (`brew install temporal` or https://docs.temporal.io/cli)
-- Google Gemini API key (for ADK agents)
+- [Temporal CLI](https://docs.temporal.io/cli) (`brew install temporal`)
+- Google Gemini API key (for ADK agents; falls back to mock mode without it)
 
 ## Quick Start
 
@@ -51,65 +65,44 @@ Kill the worker mid-flight — Temporal recovers and the delivery completes.
 temporal server start-dev
 ```
 
-### 2. Install dependencies
+### 2. Install and run
 
 ```bash
-cd drone-fleet-demo
-pip install -r requirements.txt
+pip install -e ".[dev]"
+echo 'export GOOGLE_API_KEY="your-key-here"' > .env
+./run.sh
 ```
 
-### 3. Set your Gemini API key
-
-```bash
-export GOOGLE_API_KEY="your-key-here"
-```
-
-### 4. Run the demo server
-
-```bash
-python server.py
-```
-
-### 5. Open the dashboard
+### 3. Open the dashboard
 
 Navigate to http://localhost:8080
 
-## Demo Script (2-3 minutes)
+## Demo Flow
 
-| Time | Action | What Audience Sees |
-|------|--------|--------------------|
-| 0:00 | Click "Launch Deliveries" | Two drones leave warehouse, moving across SF map |
-| 0:30 | Drone 1 completes | First delivery card turns green. Baseline. |
-| 0:50 | Click "Kill Worker" mid-flight on Drone 2 | RED OVERLAY. Drone 2 freezes. Worker status: OFFLINE |
-| 1:00 | Show Temporal UI (localhost:8233) | Workflow running, activity timed out, pending retry |
-| 1:30 | Click "Restart Worker" | Drone 2 resumes from exact position, completes delivery |
-| 2:00 | Wrap up | "Now imagine 10,000 drones. Every crash self-heals." |
+1. **Start Deliveries** — 3 AI-Crews dispatch from Ice Cream Kitchen to MGM Grand, Caesars Palace, Mandalay Bay
+2. **Crash Recovery** — Kill the service mid-flight → red overlay → restart → blue "Replaying..." overlay → AI-Crews resume
+3. **Cooler Malfunction** — Trigger disruption → agents reason in parallel → recovery plan → orders rerouted
+4. **Customer Change** — Submit a change → agent evaluates → approve/reject → order updated
 
 ## Key Files
 
 | File | What it does |
 |------|-------------|
-| `models.py` | Data models for drones, missions, coordinates |
-| `simulation.py` | In-memory fleet state (positions, statuses) |
-| `activities.py` | Temporal activities — the retryable units of work |
-| `workflows.py` | Temporal workflows — orchestrate the delivery sequence |
-| `agents.py` | ADK agent definitions (dispatch + drone) |
-| `worker.py` | Temporal worker setup |
-| `server.py` | FastAPI server — APIs, WebSocket, serves frontend |
-| `frontend/index.html` | Leaflet map dashboard with dark theme |
+| `agent_fleet/models.py` | Dataclass models for all Temporal payloads |
+| `agent_fleet/simulation.py` | In-memory fleet state (singleton shared by worker + server) |
+| `agent_fleet/activities.py` | Temporal activities — retryable units of work |
+| `agent_fleet/workflows.py` | Temporal workflows — orchestration + signal handling |
+| `agent_fleet/agents.py` | ADK agent definitions (Fleet + Customer + Resolver) |
+| `agent_fleet/worker.py` | Temporal worker setup with `GoogleAdkPlugin` |
+| `agent_fleet/server.py` | FastAPI server — APIs, WebSocket, frontend |
+| `agent_fleet/locations.py` | Las Vegas Strip locations and AI-Crew assignments |
+| `frontend/index.html` | Single-file SPA — Leaflet map, agent panels, overlays |
 
-## How Failure/Recovery Works
+## Commands
 
-1. `navigate_to` activity heartbeats every 0.8s as the drone moves
-2. Heartbeat timeout is 5s — if no heartbeat for 5s, Temporal marks it failed
-3. Retry policy: up to 10 attempts with 2s initial backoff
-4. When worker restarts, Temporal replays the workflow event history
-5. Completed activities are skipped (instant), failed activity is retried
-6. Drone picks up from its last known position, not from the warehouse
-
-
-NEXT
-Framing: courier app 
-Two agents: Dispatch (assignment reasoning) + Exception (disruption handling)
-Visual: Couriers moving on SF map, still the core demo
-Kill/recovery: Fleet ops brain goes down, couriers lose their intelligence layer, Temporal recovers everything
+```bash
+make lint    # ruff check + format check
+make fmt     # ruff format (write)
+make test    # pytest
+make run     # start the demo
+```

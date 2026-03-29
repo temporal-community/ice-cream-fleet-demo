@@ -1,9 +1,12 @@
 """
-FastAPI server — serves the frontend, exposes fleet state via WebSocket,
-and provides API endpoints to start/stop the demo.
+FastAPI server for the Meltdown ice cream delivery demo.
+
+Serves the frontend, exposes fleet state via WebSocket, and provides
+API endpoints for demo control (start, crash, restart, trigger disruption,
+customer change, approve/reject).
 
 Run with:
-    python server.py
+    python -m agent_fleet.server
 """
 
 from __future__ import annotations
@@ -20,35 +23,56 @@ from pydantic import BaseModel
 from temporalio.client import Client
 from temporalio.service import RPCError
 
-from agent_fleet.models import DemoEventConfig
+from agent_fleet.locations import DELIVERY_DESTINATIONS, WAREHOUSE, WAREHOUSE_LABEL
+from agent_fleet.models import (
+    ConditionUpdate,
+    CustomerChangeInput,
+    DemoEventConfig,
+    DisruptionSignalInput,
+    MeltdownDemoInput,
+    OperatorDecision,
+)
 from agent_fleet.simulation import fleet
-from agent_fleet.worker import create_worker, TASK_QUEUE, TEMPORAL_ADDRESS
-from agent_fleet.workflows import FleetDispatchWorkflow, FleetDispatchInput
-
-from agent_fleet.locations import WAREHOUSE, WAREHOUSE_LABEL, DELIVERY_DESTINATIONS
+from agent_fleet.worker import TASK_QUEUE, TEMPORAL_ADDRESS, create_worker
+from agent_fleet.workflows import MeltdownDemoWorkflow
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Escalation state (mutable at runtime, passed to new workflows) ---
+# --- Runtime state ---
 
 _escalation_enabled = False
+_worker_task: asyncio.Task | None = None
+_temporal_client: Client | None = None
+_was_crashed = False
+_disruption_watcher: asyncio.Task | None = None
+
 
 # --- Worker lifecycle ---
 
-_worker_task: asyncio.Task | None = None
-_temporal_client: Client | None = None
-
 
 async def _start_worker() -> None:
-    """Start the Temporal worker as a background task."""
-    global _worker_task, _temporal_client
+    global _worker_task, _temporal_client, _was_crashed
     if _worker_task and not _worker_task.done():
         logger.warning("Worker already running")
         return
 
     _temporal_client = await Client.connect(TEMPORAL_ADDRESS)
     worker = await create_worker(_temporal_client)
+
+    # If restarting after a crash, enter replay phase
+    if _was_crashed:
+        _was_crashed = False
+        await fleet.mark_worker_restart()
+
+        async def _clear_recovery():
+            try:
+                await asyncio.sleep(4)
+                await fleet.mark_recovery_complete()
+            except Exception as e:
+                logger.error(f"Recovery clear failed: {e}")
+
+        asyncio.create_task(_clear_recovery())
 
     async def _run():
         try:
@@ -62,10 +86,11 @@ async def _start_worker() -> None:
     logger.info("Worker started")
 
 
-async def _stop_worker() -> None:
-    """Stop the worker — simulates a service crash for the demo."""
-    global _worker_task
+async def _stop_worker(*, crash: bool = False) -> None:
+    """Stop the worker. Set crash=True to enter replay phase on restart."""
+    global _worker_task, _was_crashed
     if _worker_task and not _worker_task.done():
+        _was_crashed = crash
         _worker_task.cancel()
         try:
             await _worker_task
@@ -81,52 +106,51 @@ async def _cancel_running_workflows() -> None:
     """Best-effort cancel of known workflow IDs."""
     if _temporal_client is None:
         return
-    for wf_id in ["fleet-dispatch", "delivery-mission-1", "delivery-mission-2"]:
+    # Cancel main workflow and all AI-Crew routes
+    workflow_ids = ["meltdown-demo"]
+    for i in range(1, 4):
+        workflow_ids.append(f"route-ai-crew-{i}")
+    for wf_id in workflow_ids:
         try:
             handle = _temporal_client.get_workflow_handle(wf_id)
             await handle.cancel()
         except Exception:
-            pass  # workflow may not exist or already completed
+            pass
 
 
 # --- App lifecycle ---
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start worker on boot
     await _start_worker()
     yield
-    # Shutdown
     await _stop_worker()
 
 
-app = FastAPI(title="Courier Fleet Demo", lifespan=lifespan)
+app = FastAPI(title="Meltdown Ice Cream Delivery", lifespan=lifespan)
 
 
-# --- API endpoints ---
+# --- Demo control endpoints ---
+
 
 @app.post("/api/start")
-async def start_missions():
-    """Kick off all delivery missions via the FleetDispatchWorkflow."""
+async def start_demo():
+    """Start the Meltdown demo workflow."""
     if _temporal_client is None:
         return {"error": "Temporal client not connected"}
 
-    mission_ids = list(fleet.missions.keys())
-
     try:
         handle = await _temporal_client.start_workflow(
-            FleetDispatchWorkflow.run,
-            FleetDispatchInput(
-                mission_ids=mission_ids,
-                escalation_enabled=_escalation_enabled,
-            ),
-            id="fleet-dispatch",
+            MeltdownDemoWorkflow.run,
+            MeltdownDemoInput(escalation_enabled=_escalation_enabled),
+            id="meltdown-demo",
             task_queue=TASK_QUEUE,
         )
     except RPCError as e:
         if "already started" in str(e).lower():
             return {
-                "error": "Workflow already running. Reset the demo first.",
+                "error": "Demo already running. Reset first.",
                 "status": "already_running",
             }
         raise
@@ -134,54 +158,243 @@ async def start_missions():
     return {
         "status": "started",
         "workflow_id": handle.id,
-        "missions": mission_ids,
+        "escalation_enabled": _escalation_enabled,
     }
 
 
-@app.post("/api/stop-worker")
-async def stop_worker():
-    """Stop the Temporal worker to simulate a service crash. Activities in flight
-    will time out, and Temporal will retry them when a worker reconnects."""
-    await _stop_worker()
+@app.post("/api/crash-service")
+async def crash_service():
+    """Stop the Temporal worker to simulate a service crash."""
+    await _stop_worker(crash=True)
     return {
-        "status": "worker_stopped",
-        "message": "Service crashed. Activities will timeout and retry when service restarts.",
+        "status": "service_crashed",
+        "message": "Service crashed! Ice cream deliveries frozen. Restart to recover.",
     }
 
 
-@app.post("/api/restart-worker")
-async def restart_worker():
-    """Restart the Temporal worker. Temporal will replay workflows and
-    retry any failed activities — couriers resume from where they were."""
+@app.post("/api/restart-service")
+async def restart_service():
+    """Restart the Temporal worker. Workflows resume from where they left off."""
     await _start_worker()
     return {
-        "status": "worker_restarted",
-        "message": "Service back online. Temporal replaying workflows...",
+        "status": "service_restarted",
+        "message": "Service back online. Temporal replaying workflows — deliveries resuming.",
     }
 
 
 @app.post("/api/reset")
-async def reset_state():
-    """Cancel running workflows and reset simulation state for a fresh demo run."""
+async def reset_demo():
+    """Cancel running workflows and reset simulation state."""
     await _cancel_running_workflows()
     fleet.reset()
     return {"status": "reset"}
 
 
-@app.get("/api/locations")
-async def get_locations():
-    """Return warehouse and delivery destinations for the frontend map."""
+# --- Disruption endpoint ---
+
+
+class TriggerDisruptionRequest(BaseModel):
+    crew_id: str = "ai-crew-1"
+    at_nav_step: int = 5
+
+
+@app.post("/api/trigger-disruption")
+async def trigger_disruption(body: TriggerDisruptionRequest):
+    """Arm a cooler malfunction and auto-signal the workflow when it fires."""
+    config = DemoEventConfig(
+        cooler_malfunction_at_nav_step=body.at_nav_step,
+        cooler_malfunction_crew=body.crew_id,
+        enabled=True,
+    )
+    await fleet.set_demo_events(config)
+
+    # Start background watcher that signals the workflow when the
+    # malfunction actually triggers (at the configured nav step)
+    global _disruption_watcher
+    if _disruption_watcher and not _disruption_watcher.done():
+        logger.warning("Disruption watcher already running — skipping duplicate")
+    else:
+        _disruption_watcher = asyncio.create_task(_watch_for_disruption())
+
     return {
-        "warehouse": {"lat": WAREHOUSE.lat, "lng": WAREHOUSE.lng, "label": WAREHOUSE_LABEL},
-        "destinations": {
-            mid: {
-                "lat": info["coords"].lat,
-                "lng": info["coords"].lng,
-                "label": info["map_label"],
-            }
-            for mid, info in DELIVERY_DESTINATIONS.items()
-        },
+        "status": "disruption_armed",
+        "crew_id": body.crew_id,
+        "triggers_at_step": body.at_nav_step,
     }
+
+
+async def _watch_for_disruption() -> None:
+    """Poll simulation briefly until cooler malfunction fires, then signal workflow."""
+    try:
+        for _ in range(120):  # Up to 60 seconds
+            await asyncio.sleep(0.5)
+            result = await fleet.check_disruption()
+            if result["disruption_detected"]:
+                if _temporal_client is not None:
+                    try:
+                        handle = _temporal_client.get_workflow_handle("meltdown-demo")
+                        await handle.signal(
+                            MeltdownDemoWorkflow.disruption_detected,
+                            DisruptionSignalInput(
+                                crew_id=result["crew_id"],
+                                cooler_temp_f=result["cooler_temp_f"],
+                                affected_order_ids=result["affected_order_ids"],
+                                description=result["description"],
+                            ),
+                        )
+                        logger.info("Disruption signal sent to workflow")
+                    except Exception as e:
+                        logger.error(f"Failed to signal disruption: {e}")
+                return
+        logger.warning("Disruption watcher timed out — malfunction never triggered")
+    except Exception as e:
+        logger.error(f"Disruption watcher failed: {e}")
+
+
+# --- Customer change endpoints ---
+
+
+class CustomerChangeRequest(BaseModel):
+    order_id: str
+    change_type: str = "address_change"  # "address_change" or "cancel"
+    new_details: str = ""
+    new_lat: float | None = None
+    new_lng: float | None = None
+
+
+@app.post("/api/customer-change")
+async def submit_customer_change(body: CustomerChangeRequest):
+    """Submit a customer change request (triggers human-in-the-loop)."""
+    if _temporal_client is None:
+        return {"error": "Temporal client not connected"}
+
+    change = CustomerChangeInput(
+        order_id=body.order_id,
+        change_type=body.change_type,
+        new_details=body.new_details,
+        new_lat=body.new_lat,
+        new_lng=body.new_lng,
+    )
+
+    try:
+        handle = _temporal_client.get_workflow_handle("meltdown-demo")
+        await handle.signal(MeltdownDemoWorkflow.customer_change, change)
+    except RPCError as e:
+        return {"error": f"Failed to signal workflow: {e}"}
+
+    return {
+        "status": "change_submitted",
+        "order_id": body.order_id,
+        "change_type": body.change_type,
+    }
+
+
+class ChangeDecisionRequest(BaseModel):
+    approved: bool
+
+
+@app.post("/api/approve-change")
+async def approve_change(body: ChangeDecisionRequest):
+    """Approve or reject a pending customer change."""
+    if _temporal_client is None:
+        return {"error": "Temporal client not connected"}
+
+    try:
+        handle = _temporal_client.get_workflow_handle("meltdown-demo")
+        await handle.signal(MeltdownDemoWorkflow.change_approved, body.approved)
+    except RPCError as e:
+        return {"error": f"Failed to signal workflow: {e}"}
+
+    decision = "approved" if body.approved else "rejected"
+    return {"status": f"change_{decision}"}
+
+
+# --- Operator decision endpoint ---
+
+
+class OperatorDecisionRequest(BaseModel):
+    action: str  # "approve" or "reject"
+    notes: str = ""
+
+
+@app.post("/api/operator-decision")
+async def submit_operator_decision(body: OperatorDecisionRequest):
+    """Submit operator approval/rejection for a pending recommendation."""
+    if _temporal_client is None:
+        return {"error": "Temporal client not connected"}
+    try:
+        handle = _temporal_client.get_workflow_handle("meltdown-demo")
+        await handle.signal(
+            MeltdownDemoWorkflow.operator_decision,
+            OperatorDecision(action=body.action, notes=body.notes),
+        )
+    except RPCError as e:
+        return {"error": f"Failed to signal workflow: {e}"}
+    return {"status": f"decision_{body.action}"}
+
+
+# --- Inject conditions endpoint ---
+
+
+class InjectConditionsRequest(BaseModel):
+    description: str = "Traffic delay reported"
+    crew_id: str | None = None
+    details: str = ""
+
+
+@app.post("/api/inject-conditions")
+async def inject_conditions(body: InjectConditionsRequest):
+    """Inject new conditions to trigger agent re-evaluation."""
+    if _temporal_client is None:
+        return {"error": "Temporal client not connected"}
+    try:
+        handle = _temporal_client.get_workflow_handle("meltdown-demo")
+        await handle.signal(
+            MeltdownDemoWorkflow.updated_conditions,
+            ConditionUpdate(
+                description=body.description,
+                crew_id=body.crew_id,
+                details=body.details,
+            ),
+        )
+    except RPCError as e:
+        return {"error": f"Failed to signal workflow: {e}"}
+    return {"status": "conditions_injected"}
+
+
+# --- Demo config endpoints ---
+
+
+@app.post("/api/toggle-escalation")
+async def toggle_escalation():
+    """Toggle escalation mode (customer change / human-in-the-loop)."""
+    global _escalation_enabled
+    _escalation_enabled = not _escalation_enabled
+    return {
+        "status": "escalation_enabled" if _escalation_enabled else "escalation_disabled",
+        "escalation_enabled": _escalation_enabled,
+    }
+
+
+class DemoEventConfigRequest(BaseModel):
+    cooler_malfunction_at_nav_step: int | None = None
+    cooler_malfunction_crew: str = "ai-crew-1"
+    enabled: bool = False
+
+
+@app.post("/api/demo-events")
+async def configure_demo_events(config: DemoEventConfigRequest):
+    """Configure demo event injection."""
+    demo_config = DemoEventConfig(
+        cooler_malfunction_at_nav_step=config.cooler_malfunction_at_nav_step,
+        cooler_malfunction_crew=config.cooler_malfunction_crew,
+        enabled=config.enabled,
+    )
+    await fleet.set_demo_events(demo_config)
+    return {"status": "configured", "config": config.model_dump()}
+
+
+# --- State query endpoints ---
 
 
 @app.get("/api/state")
@@ -190,57 +403,29 @@ async def get_state():
     return await fleet.snapshot()
 
 
-# --- New endpoints ---
-
-class HumanDecisionRequest(BaseModel):
-    decision: str = "continue"
-
-
-@app.post("/api/missions/{mission_id}/decide")
-async def send_human_decision(mission_id: str, body: HumanDecisionRequest):
-    """Send a human decision signal to a running delivery workflow (escalation mode only)."""
-    if _temporal_client is None:
-        return {"error": "Temporal client not connected"}
-
-    try:
-        handle = _temporal_client.get_workflow_handle(f"delivery-{mission_id}")
-        await handle.signal("human_decision", body.decision)
-    except RPCError as e:
-        return {"error": f"Failed to signal workflow: {e}", "mission_id": mission_id}
-
-    return {"status": "signal_sent", "mission_id": mission_id, "decision": body.decision}
-
-
-class DemoEventConfigRequest(BaseModel):
-    battery_drop_at_nav_step: int | None = None
-    battery_drop_to_pct: float = 15.0
-    weather_storm_at_nav_step: int | None = None
-    enabled: bool = False
-
-
-@app.post("/api/demo-events")
-async def configure_demo_events(config: DemoEventConfigRequest):
-    """Configure demo event injection (battery drops, weather storms)."""
-    demo_config = DemoEventConfig(
-        battery_drop_at_nav_step=config.battery_drop_at_nav_step,
-        battery_drop_to_pct=config.battery_drop_to_pct,
-        weather_storm_at_nav_step=config.weather_storm_at_nav_step,
-        enabled=config.enabled,
-    )
-    await fleet.set_demo_events(demo_config)
-    return {"status": "configured", "config": config.model_dump()}
-
-
-@app.post("/api/toggle-escalation")
-async def toggle_escalation():
-    """Toggle escalation mode. Takes effect on the next workflow start."""
-    global _escalation_enabled
-    _escalation_enabled = not _escalation_enabled
-    status = "escalation_enabled" if _escalation_enabled else "escalation_disabled"
-    return {"status": status, "escalation_enabled": _escalation_enabled}
+@app.get("/api/locations")
+async def get_locations():
+    """Return kitchen and hotel locations for the frontend map."""
+    return {
+        "warehouse": {
+            "lat": WAREHOUSE.lat,
+            "lng": WAREHOUSE.lng,
+            "label": WAREHOUSE_LABEL,
+        },
+        "destinations": {
+            oid: {
+                "lat": info["coords"].lat,
+                "lng": info["coords"].lng,
+                "label": info["map_label"],
+                "hotel": info["hotel"],
+            }
+            for oid, info in DELIVERY_DESTINATIONS.items()
+        },
+    }
 
 
 # --- WebSocket for real-time state updates ---
+
 
 @app.websocket("/ws")
 async def websocket_state(ws: WebSocket):
@@ -272,4 +457,5 @@ async def index():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
+
+    uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")

@@ -1,208 +1,403 @@
 """
-Shared simulation state for the courier fleet demo.
+Shared simulation state for the Meltdown ice cream delivery demo.
 
-This module manages courier positions, mission status, and provides the
-"physical world" that activities read/write. It's backed by an in-memory
-dict so both the Temporal worker and the FastAPI server can access it
+Manages crew positions, order status, cooler conditions, and agent events.
+Backed by in-memory state shared between the Temporal worker and FastAPI server
 (they run in the same process).
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections import deque
 from typing import Any
 
-from agent_fleet.models import (
-    Coords, Courier, CourierStatus, Mission, MissionStatus, DemoEventConfig,
+from agent_fleet.locations import (
+    DELIVERY_DESTINATIONS,
+    WAREHOUSE,
 )
-from agent_fleet.locations import WAREHOUSE, DELIVERY_DESTINATIONS
+from agent_fleet.models import (
+    AgentEvent,
+    CoolerStatus,
+    Coords,
+    Crew,
+    CrewStatus,
+    DemoEventConfig,
+    Order,
+    OrderPriority,
+    OrderStatus,
+)
 
 _EVENT_LOG_MAX = 500
 
 
 class FleetState:
-    """Global mutable state for the courier simulation."""
+    """Global mutable state for the ice cream fleet simulation."""
 
     def __init__(self) -> None:
-        self.couriers: dict[str, Courier] = {}
-        self.missions: dict[str, Mission] = {}
+        self.crews: dict[str, Crew] = {}
+        self.orders: dict[str, Order] = {}
         self.event_log: deque[dict[str, Any]] = deque(maxlen=_EVENT_LOG_MAX)
+        self.agent_events: list[AgentEvent] = []
         self._lock = asyncio.Lock()
         self.demo_events = DemoEventConfig()
-        self._weather_conditions: dict[str, str] = {}
         self._nav_step_counters: dict[str, int] = {}
+        # Recovery / replay tracking
+        self.worker_generation: int = 0
+        self.recovery_phase: bool = False
         self._init_state()
 
     def _init_state(self) -> None:
-        for i in range(1, 3):
-            cid = f"courier-{i}"
-            self.couriers[cid] = Courier(
-                courier_id=cid,
+        # 3 AI-Crews starting at the kitchen
+        for i in range(1, 4):
+            cid = f"ai-crew-{i}"
+            self.crews[cid] = Crew(
+                crew_id=cid,
                 position=Coords(lat=WAREHOUSE.lat, lng=WAREHOUSE.lng),
             )
-            self._weather_conditions[cid] = "clear"
             self._nav_step_counters[cid] = 0
-        for mid, info in DELIVERY_DESTINATIONS.items():
-            self.missions[mid] = Mission(
-                mission_id=mid,
-                order_label=info["label"],
-                pickup_coords=Coords(lat=WAREHOUSE.lat, lng=WAREHOUSE.lng),
+
+        # 3 orders from delivery destinations
+        for oid, info in DELIVERY_DESTINATIONS.items():
+            self.orders[oid] = Order(
+                order_id=oid,
+                hotel=info["hotel"],
+                label=info["label"],
+                priority=OrderPriority(info["priority"]),
+                servings=info["servings"],
                 delivery_coords=info["coords"],
+                deadline_minutes=info["deadline_minutes"],
             )
 
     def reset(self) -> None:
         """Reset simulation to initial state for a fresh demo run."""
-        self.couriers.clear()
-        self.missions.clear()
+        self.crews.clear()
+        self.orders.clear()
         self.event_log.clear()
+        self.agent_events.clear()
         self.demo_events = DemoEventConfig()
-        self._weather_conditions.clear()
         self._nav_step_counters.clear()
+        self.worker_generation = 0
+        self.recovery_phase = False
         self._init_state()
 
-    # --- Courier operations ---
-
-    async def update_courier_position(
-        self, courier_id: str, lat: float, lng: float
-    ) -> None:
+    async def mark_worker_restart(self) -> None:
+        """Mark that the worker has restarted — enter replay phase."""
         async with self._lock:
-            c = self.couriers[courier_id]
+            self.worker_generation += 1
+            self.recovery_phase = True
+            self._log("[REPLAY] Worker restarted — replaying workflow history")
+
+    async def mark_recovery_complete(self) -> None:
+        """Clear the replay/recovery phase flag."""
+        async with self._lock:
+            self.recovery_phase = False
+            self._log("[REPLAY] Replay complete — workflows resumed")
+
+    def is_recovering(self) -> bool:
+        """Check if the worker is currently in recovery/replay phase."""
+        return self.recovery_phase
+
+    # --- Crew operations ---
+
+    async def update_crew_position(self, crew_id: str, lat: float, lng: float) -> None:
+        async with self._lock:
+            c = self.crews[crew_id]
             c.position = Coords(lat=lat, lng=lng)
             c.path_history.append({"lat": lat, "lng": lng, "t": time.time()})
 
-    async def set_courier_status(
-        self, courier_id: str, status: CourierStatus, mission_id: str | None = None
-    ) -> None:
+    async def set_crew_status(self, crew_id: str, status: CrewStatus) -> None:
         async with self._lock:
-            c = self.couriers[courier_id]
-            c.status = status
-            if mission_id is not None:
-                c.current_mission_id = mission_id
-            self._log(f"Courier {courier_id} -> {status.value}")
+            self.crews[crew_id].status = status
+            self._log(f"AI-Crew {crew_id} -> {status.value}")
 
-    # --- Battery operations ---
-
-    async def drain_battery(self, courier_id: str, amount: float) -> float:
-        """Decrement battery, return new value."""
+    async def get_crew_position(self, crew_id: str) -> tuple[float, float]:
         async with self._lock:
-            c = self.couriers[courier_id]
-            c.battery_pct = max(0.0, c.battery_pct - amount)
-            return c.battery_pct
+            c = self.crews[crew_id]
+            return c.position.lat, c.position.lng
 
-    async def get_battery(self, courier_id: str) -> float:
+    async def crew_exists(self, crew_id: str) -> bool:
         async with self._lock:
-            return self.couriers[courier_id].battery_pct
+            return crew_id in self.crews
 
-    # --- Weather operations ---
-
-    async def get_weather(self, courier_id: str) -> str:
-        """Return weather condition, checking demo events for storm injection."""
+    async def get_crew(self, crew_id: str) -> Crew | None:
         async with self._lock:
-            return self._weather_conditions.get(courier_id, "clear")
+            return self.crews.get(crew_id)
+
+    async def get_order(self, order_id: str) -> Order | None:
+        async with self._lock:
+            return self.orders.get(order_id)
+
+    # --- Cooler operations ---
+
+    async def get_cooler_temp(self, crew_id: str) -> float:
+        async with self._lock:
+            return self.crews[crew_id].cooler_temp_f
+
+    async def set_cooler_temp(self, crew_id: str, temp_f: float) -> None:
+        async with self._lock:
+            self.crews[crew_id].cooler_temp_f = temp_f
+
+    async def set_cooler_status(self, crew_id: str, status: CoolerStatus) -> None:
+        async with self._lock:
+            self.crews[crew_id].cooler_status = status
+            self._log(f"AI-Crew {crew_id} cooler -> {status.value}")
+
+    async def get_cooler_status(self, crew_id: str) -> CoolerStatus:
+        async with self._lock:
+            return self.crews[crew_id].cooler_status
 
     # --- Nav step tracking & demo event triggers ---
 
-    async def increment_nav_step(self, courier_id: str) -> None:
+    async def increment_nav_step(self, crew_id: str) -> None:
         """Increment nav step counter and apply demo event triggers."""
         async with self._lock:
-            self._nav_step_counters[courier_id] = (
-                self._nav_step_counters.get(courier_id, 0) + 1
-            )
-            step = self._nav_step_counters[courier_id]
+            self._nav_step_counters[crew_id] = self._nav_step_counters.get(crew_id, 0) + 1
+            step = self._nav_step_counters[crew_id]
 
             if not self.demo_events.enabled:
                 return
 
-            # Battery drop trigger
+            # Cooler malfunction trigger
             if (
-                self.demo_events.battery_drop_at_nav_step is not None
-                and step == self.demo_events.battery_drop_at_nav_step
+                self.demo_events.cooler_malfunction_at_nav_step is not None
+                and crew_id == self.demo_events.cooler_malfunction_crew
+                and step == self.demo_events.cooler_malfunction_at_nav_step
             ):
-                c = self.couriers[courier_id]
-                c.battery_pct = self.demo_events.battery_drop_to_pct
+                c = self.crews[crew_id]
+                c.cooler_status = CoolerStatus.MALFUNCTION
+                c.cooler_temp_f = 45.0  # Rising — ice cream at risk
                 self._log(
-                    f"[DEMO EVENT] Courier {courier_id} battery dropped to "
-                    f"{self.demo_events.battery_drop_to_pct}%"
-                )
-
-            # Weather storm trigger
-            if (
-                self.demo_events.weather_storm_at_nav_step is not None
-                and step == self.demo_events.weather_storm_at_nav_step
-            ):
-                self._weather_conditions[courier_id] = "storm"
-                self._log(
-                    f"[DEMO EVENT] Storm conditions for courier {courier_id}"
+                    f"[DEMO EVENT] Cooler malfunction on {crew_id}! "
+                    f"Temp rising to {c.cooler_temp_f}F"
                 )
 
     async def set_demo_events(self, config: DemoEventConfig) -> None:
-        """Configure demo events (called from server endpoint)."""
         async with self._lock:
             self.demo_events = config
 
-    # --- Mission operations ---
+    # --- Order operations ---
 
-    async def assign_mission(self, mission_id: str, courier_id: str) -> None:
+    async def assign_orders_to_crew(self, crew_id: str, order_ids: list[str]) -> None:
         async with self._lock:
-            m = self.missions[mission_id]
-            m.assigned_courier_id = courier_id
-            m.status = MissionStatus.ASSIGNED
-            m.status_log.append(f"Assigned to {courier_id}")
-            self.couriers[courier_id].current_mission_id = mission_id
-            self._log(f"Mission {mission_id} assigned to {courier_id}")
+            c = self.crews[crew_id]
+            c.current_orders = order_ids
+            c.status = CrewStatus.EN_ROUTE_PICKUP
+            for oid in order_ids:
+                o = self.orders[oid]
+                o.assigned_crew_id = crew_id
+                o.status = OrderStatus.ASSIGNED
+                o.status_log.append(f"Assigned to {crew_id}")
+            self._log(f"Orders {order_ids} assigned to {crew_id}")
 
-    async def update_mission_status(
-        self, mission_id: str, status: MissionStatus, note: str = ""
+    async def update_order_status(self, order_id: str, status: OrderStatus, note: str = "") -> None:
+        async with self._lock:
+            o = self.orders[order_id]
+            o.status = status
+            if note:
+                o.status_log.append(note)
+            self._log(f"Order {order_id} -> {status.value}: {note}")
+
+    async def complete_order_delivery(self, crew_id: str, order_id: str) -> int:
+        """Mark an order delivered and remove it from the crew's active queue."""
+        async with self._lock:
+            o = self.orders[order_id]
+            o.status = OrderStatus.DELIVERED
+            o.status_log.append("Delivered successfully!")
+
+            crew = self.crews[crew_id]
+            if order_id in crew.current_orders:
+                crew.current_orders.remove(order_id)
+
+            self._log(f"Order {order_id} -> {OrderStatus.DELIVERED.value}: Delivered successfully!")
+            return len(crew.current_orders)
+
+    async def get_order_crew(self, order_id: str) -> str | None:
+        async with self._lock:
+            o = self.orders.get(order_id)
+            if o is None:
+                return None
+            return o.assigned_crew_id
+
+    async def get_crew_orders(self, crew_id: str) -> list[str]:
+        async with self._lock:
+            return list(self.crews[crew_id].current_orders)
+
+    async def reroute_orders(
+        self, from_crew_id: str, to_crew_id: str, order_ids: list[str]
+    ) -> None:
+        """Move orders from one crew to another (disruption recovery)."""
+        async with self._lock:
+            for oid in order_ids:
+                o = self.orders[oid]
+                o.assigned_crew_id = to_crew_id
+                o.status = OrderStatus.REROUTED
+                o.status_log.append(f"Rerouted from {from_crew_id} to {to_crew_id}")
+                # Update crew order lists
+                if oid in self.crews[from_crew_id].current_orders:
+                    self.crews[from_crew_id].current_orders.remove(oid)
+                self.crews[to_crew_id].current_orders.append(oid)
+
+            self.crews[from_crew_id].status = CrewStatus.RETURNING
+            self._log(f"Orders {order_ids} rerouted: {from_crew_id} -> {to_crew_id}")
+
+    async def update_order_delivery(self, order_id: str, new_lat: float, new_lng: float) -> None:
+        """Update delivery coordinates for an order (customer change)."""
+        async with self._lock:
+            o = self.orders[order_id]
+            o.delivery_coords = Coords(lat=new_lat, lng=new_lng)
+            o.status_log.append(f"Delivery address updated to ({new_lat:.4f}, {new_lng:.4f})")
+
+    async def cancel_order(self, order_id: str) -> None:
+        async with self._lock:
+            o = self.orders[order_id]
+            o.status = OrderStatus.CANCELLED
+            o.status_log.append("Cancelled by customer")
+            # Remove from crew's list
+            if o.assigned_crew_id:
+                c = self.crews[o.assigned_crew_id]
+                if order_id in c.current_orders:
+                    c.current_orders.remove(order_id)
+            self._log(f"Order {order_id} cancelled")
+
+    # --- Backup crew selection ---
+
+    async def find_backup_crew(
+        self, failed_crew_id: str, order_count: int = 1
+    ) -> tuple[str | None, str]:
+        """Find the best available crew to absorb rerouted orders.
+
+        Selection criteria (in order):
+        1. Not the failed crew
+        2. Cooler is OK (not malfunction/failed)
+        3. Has capacity (capacity - current_orders >= order_count)
+        4. Closest to the failed crew's position (shortest reroute)
+
+        Returns (crew_id, reason) or (None, reason) if none available.
+        """
+        async with self._lock:
+            failed = self.crews.get(failed_crew_id)
+            if failed is None:
+                return None, f"Unknown AI-Crew {failed_crew_id}"
+
+            failed_lat = failed.position.lat
+            failed_lng = failed.position.lng
+
+            candidates = []
+            for cid, c in self.crews.items():
+                if cid == failed_crew_id:
+                    continue
+                if c.cooler_status != CoolerStatus.OK:
+                    continue
+                available_capacity = c.capacity - len(c.current_orders)
+                if available_capacity < order_count:
+                    continue
+
+                # Euclidean distance (good enough for demo on the Strip)
+                dist = math.sqrt(
+                    (c.position.lat - failed_lat) ** 2 + (c.position.lng - failed_lng) ** 2
+                )
+                candidates.append((cid, dist, available_capacity))
+
+            if not candidates:
+                return None, (
+                    f"No AI-Crews available: all either failed, "
+                    f"have cooler issues, or lack capacity for {order_count} orders"
+                )
+
+            # Sort by distance (closest first)
+            candidates.sort(key=lambda x: x[1])
+            best_id, best_dist, best_cap = candidates[0]
+            return best_id, (
+                f"{best_id} selected: closest to {failed_crew_id}, "
+                f"cooler OK, {best_cap} capacity slots available"
+            )
+
+    # --- Agent events (for UI panel) ---
+
+    async def publish_agent_event(
+        self, agent_name: str, event_type: str, content: str, summary: str = ""
     ) -> None:
         async with self._lock:
-            m = self.missions[mission_id]
-            m.status = status
-            if note:
-                m.status_log.append(note)
-            self._log(f"Mission {mission_id} -> {status.value}: {note}")
+            event = AgentEvent(
+                agent_name=agent_name,
+                event_type=event_type,
+                content=content,
+                timestamp=time.time(),
+                summary=summary,
+            )
+            self.agent_events.append(event)
+            self._log(f"[{agent_name}] {event_type}: {content[:80]}")
 
     # --- Query ---
-
-    async def get_idle_courier(self) -> str | None:
-        async with self._lock:
-            for c in self.couriers.values():
-                if c.status == CourierStatus.IDLE:
-                    return c.courier_id
-        return None
-
-    async def get_courier_position(self, courier_id: str) -> tuple[float, float]:
-        """Return (lat, lng) under the lock."""
-        async with self._lock:
-            c = self.couriers[courier_id]
-            return c.position.lat, c.position.lng
-
-    async def get_mission_courier(self, mission_id: str) -> str | None:
-        """Return the courier_id assigned to a mission, or None."""
-        async with self._lock:
-            m = self.missions.get(mission_id)
-            if m is None:
-                return None
-            return m.assigned_courier_id
-
-    async def courier_exists(self, courier_id: str) -> bool:
-        """Check if a courier exists, under the lock."""
-        async with self._lock:
-            return courier_id in self.couriers
 
     async def snapshot(self) -> dict[str, Any]:
         """Return full state as JSON-serializable dict (for frontend)."""
         async with self._lock:
             return {
-                "couriers": {
-                    cid: c.to_dict() for cid, c in self.couriers.items()
-                },
-                "missions": {
-                    mid: m.to_dict() for mid, m in self.missions.items()
-                },
+                "crews": {cid: c.to_dict() for cid, c in self.crews.items()},
+                "orders": {oid: o.to_dict() for oid, o in self.orders.items()},
+                "agent_events": [e.to_dict() for e in self.agent_events],
                 "event_log": list(self.event_log),
+                "recovery": {
+                    "phase": self.recovery_phase,
+                    "worker_generation": self.worker_generation,
+                },
             }
+
+    async def get_fleet_summary(self) -> str:
+        """Return a text summary of fleet state for LLM consumption."""
+        async with self._lock:
+            lines = ["=== Fleet Status ==="]
+            for cid, c in self.crews.items():
+                orders_str = ", ".join(c.current_orders) if c.current_orders else "none"
+                lines.append(
+                    f"  {cid}: status={c.status.value}, "
+                    f"cooler={c.cooler_status.value} ({c.cooler_temp_f:.0f}F), "
+                    f"orders=[{orders_str}]"
+                )
+            lines.append("=== Orders ===")
+            for oid, o in self.orders.items():
+                lines.append(
+                    f"  {oid}: {o.hotel} ({o.label}), "
+                    f"priority={o.priority.value}, status={o.status.value}, "
+                    f"AI-Crew={o.assigned_crew_id or 'unassigned'}, "
+                    f"deadline={o.deadline_minutes}min"
+                )
+            return "\n".join(lines)
+
+    async def get_order_priorities_summary(self) -> str:
+        """Return order priority details for Customer Agent consumption."""
+        async with self._lock:
+            lines = ["=== Order Priorities ==="]
+            for oid, o in self.orders.items():
+                lines.append(
+                    f"  {oid}: {o.hotel} — {o.priority.value.upper()}, "
+                    f"{o.servings} servings, deadline={o.deadline_minutes}min, "
+                    f"status={o.status.value}"
+                )
+            return "\n".join(lines)
+
+    async def check_disruption(self) -> dict[str, Any]:
+        """Check if any crew has a cooler malfunction."""
+        async with self._lock:
+            for cid, c in self.crews.items():
+                if c.cooler_status == CoolerStatus.MALFUNCTION:
+                    affected = list(c.current_orders)
+                    return {
+                        "disruption_detected": True,
+                        "crew_id": cid,
+                        "cooler_temp_f": c.cooler_temp_f,
+                        "affected_order_ids": affected,
+                        "description": (
+                            f"Cooler malfunction on {cid}! Temperature at "
+                            f"{c.cooler_temp_f}F and rising. "
+                            f"{len(affected)} orders at risk of melting."
+                        ),
+                    }
+            return {"disruption_detected": False}
 
     # --- Internals ---
 
