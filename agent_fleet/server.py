@@ -106,19 +106,21 @@ async def _stop_worker(*, crash: bool = False) -> None:
 
 
 async def _cancel_running_workflows() -> None:
-    """Best-effort cancel of known workflow IDs."""
+    """Best-effort terminate of known workflow IDs."""
     if _temporal_client is None:
         return
-    # Cancel main workflow and all AI-Crew routes
+    # Terminate main workflow and all AI-Crew routes
     workflow_ids = ["meltdown-demo"]
     for i in range(1, 4):
         workflow_ids.append(f"route-ai-crew-{i}")
     for wf_id in workflow_ids:
         try:
             handle = _temporal_client.get_workflow_handle(wf_id)
-            await handle.cancel()
+            await handle.terminate("Demo reset")
         except Exception:
             pass
+    # Wait for Temporal to fully close the workflows
+    await asyncio.sleep(1.0)
 
 
 # --- App lifecycle ---
@@ -143,26 +145,26 @@ async def start_demo():
     if _temporal_client is None:
         return {"error": "Temporal client not connected"}
 
-    try:
-        handle = await _temporal_client.start_workflow(
-            MeltdownDemoWorkflow.run,
-            MeltdownDemoInput(escalation_enabled=_escalation_enabled),
-            id="meltdown-demo",
-            task_queue=TASK_QUEUE,
-        )
-    except RPCError as e:
-        if "already started" in str(e).lower():
+    # Try to start — if a stale workflow exists, terminate and retry
+    for attempt in range(3):
+        try:
+            handle = await _temporal_client.start_workflow(
+                MeltdownDemoWorkflow.run,
+                MeltdownDemoInput(escalation_enabled=_escalation_enabled),
+                id="meltdown-demo",
+                task_queue=TASK_QUEUE,
+            )
             return {
-                "error": "Demo already running. Reset first.",
-                "status": "already_running",
+                "status": "started",
+                "workflow_id": handle.id,
+                "escalation_enabled": _escalation_enabled,
             }
-        raise
-
-    return {
-        "status": "started",
-        "workflow_id": handle.id,
-        "escalation_enabled": _escalation_enabled,
-    }
+        except RPCError as e:
+            if "already started" in str(e).lower() and attempt < 2:
+                logger.info(f"Stale workflow detected (attempt {attempt+1}), terminating...")
+                await _cancel_running_workflows()
+                continue
+            raise
 
 
 @app.post("/api/crash-service")

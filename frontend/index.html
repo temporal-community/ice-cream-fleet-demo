@@ -537,32 +537,60 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
+    filter: drop-shadow(0 2px 8px rgba(0,0,0,0.5));
   }
   .vegas-star {
-    font-size: 14px;
+    font-size: 16px;
     color: #ffe14d;
-    text-shadow: 0 0 8px #ffe14d88;
+    text-shadow: 0 0 8px #ffe14d, 0 0 16px #ffe14d88;
     line-height: 1;
-    margin-bottom: -3px;
+    margin-bottom: -4px;
     z-index: 1;
   }
   .vegas-diamond {
-    background: linear-gradient(135deg, #c41e3a 0%, #e8273b 50%, #c41e3a 100%);
-    border: 2px solid #ffe14d;
-    border-radius: 2px;
-    padding: 4px 12px 3px;
+    background: #ffffff;
+    border-radius: 3px;
+    padding: 6px 14px 5px;
     text-align: center;
-    clip-path: polygon(50% 0%, 100% 15%, 100% 85%, 50% 100%, 0% 85%, 0% 15%);
+    position: relative;
     min-width: 70px;
-    padding: 10px 16px 8px;
+    /* Light bulb border effect — dots around the edge */
+    outline: 2px dashed #ff2a2a;
+    outline-offset: 2px;
+    box-shadow:
+      0 0 0 1px #cc0000,
+      0 0 6px #ff000066,
+      0 0 12px #ff000033;
+  }
+  .vegas-diamond::before {
+    content: '';
+    position: absolute;
+    inset: -5px;
+    border-radius: 5px;
+    background: radial-gradient(circle 2px at 0px 50%, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 100% 50%, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 50% 0px, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 50% 100%, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 15% 0px, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 85% 0px, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 15% 100%, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 85% 100%, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 0px 25%, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 0px 75%, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 100% 25%, #ffe14d 50%, transparent 51%),
+                radial-gradient(circle 2px at 100% 75%, #ffe14d 50%, transparent 51%);
+    pointer-events: none;
+    animation: bulbs 1.5s ease-in-out infinite alternate;
+  }
+  @keyframes bulbs {
+    0% { opacity: 0.7; }
+    100% { opacity: 1; }
   }
   .vegas-name {
     font-family: 'Monoton', cursive;
     font-size: 9px;
     font-weight: 400;
-    color: #ffe14d;
-    text-shadow: 0 0 4px #ffe14d66;
+    color: #cc0000;
     letter-spacing: 1px;
     text-transform: uppercase;
     line-height: 1.2;
@@ -571,17 +599,86 @@
   .vegas-sub {
     font-family: -apple-system, sans-serif;
     font-size: 7px;
-    color: #fff;
+    color: #cc0000;
     text-transform: uppercase;
     letter-spacing: 0.8px;
     margin-top: 1px;
-    opacity: 0.9;
+    opacity: 0.7;
   }
   .vegas-pole {
-    width: 2px;
-    height: 8px;
+    width: 3px;
+    height: 10px;
     background: linear-gradient(to bottom, #888, #555);
     border-radius: 1px;
+  }
+
+  /* --- Retro 50s ice cream shop sign --- */
+  .retro-sign {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    filter: drop-shadow(0 3px 10px rgba(0,0,0,0.5));
+  }
+  .retro-arrow {
+    font-size: 10px;
+    color: #ff69b4;
+    text-shadow: 0 0 6px #ff69b4;
+    animation: retro-blink 1s steps(2) infinite;
+    margin-bottom: -2px;
+  }
+  @keyframes retro-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .retro-body {
+    background: linear-gradient(180deg, #ffe4f0 0%, #fff 30%, #fff 70%, #ffe4f0 100%);
+    border: 3px solid #ff69b4;
+    border-radius: 20px;
+    padding: 5px 14px 4px;
+    text-align: center;
+    position: relative;
+    box-shadow:
+      0 0 8px #ff69b488,
+      0 0 16px #ff69b433,
+      inset 0 1px 0 rgba(255,255,255,0.8);
+  }
+  .retro-body::before {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border: 2px dotted #ff69b4;
+    border-radius: 24px;
+    opacity: 0.5;
+    animation: retro-dots 2s linear infinite;
+  }
+  @keyframes retro-dots {
+    0% { opacity: 0.3; }
+    50% { opacity: 0.8; }
+    100% { opacity: 0.3; }
+  }
+  .retro-name {
+    font-family: 'Monoton', cursive;
+    font-size: 10px;
+    font-weight: 400;
+    color: #d6336c;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+  .retro-sub {
+    font-family: -apple-system, sans-serif;
+    font-size: 8px;
+    color: #e64980;
+    font-style: italic;
+    letter-spacing: 0.5px;
+    margin-top: 1px;
+  }
+  .retro-pole {
+    width: 4px;
+    height: 12px;
+    background: linear-gradient(to right, #ccc, #fff, #ccc);
+    border-radius: 2px;
   }
 
   /* --- Map style picker --- */
@@ -1028,7 +1125,10 @@ const tileLayers = {
   'Watercolor': L.tileLayer('https://tiles.stadiamaps.com/tiles/stamen_watercolor/{z}/{x}/{y}.jpg', {
     maxZoom: 16,
   }),
-  'Outdoors': L.tileLayer('https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}{r}.png', {
+  'Standard': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+  }),
+  'OSM Bright': L.tileLayer('https://tiles.stadiamaps.com/tiles/osm_bright/{z}/{x}/{y}{r}.png', {
     maxZoom: 20,
   }),
   'Satellite': L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}{r}.jpg', {
@@ -1098,8 +1198,8 @@ function crewIcon(color, hasAlert, bearing) {
     className: 'crew-marker',
     html: `<div style="position:relative;width:52px;height:44px;">
       ${alertDot}
-      <div style="position:absolute;top:-4px;left:50%;transform:translateX(-50%);font-size:22px;line-height:1;z-index:2;">🍦</div>
-      <div style="margin-top:14px;font-size:28px;line-height:1;text-align:center;${flip ? 'transform:scaleX(-1);' : ''}">🚚</div>
+      <div style="position:absolute;top:-8px;left:50%;transform:translateX(-50%);font-size:30px;line-height:1;z-index:2;">🍦</div>
+      <div style="margin-top:18px;font-size:28px;line-height:1;text-align:center;${flip ? 'transform:scaleX(-1);' : ''}">🚚</div>
       <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:36px;height:4px;background:${color};border-radius:2px;opacity:0.8;"></div>
     </div>`,
     iconSize: [52, 44],
@@ -1119,7 +1219,7 @@ const CREW_COLORS = {
   disconnected: '#ef4444',
 };
 
-// --- Vegas sign tooltip ---
+// --- Sign tooltips ---
 function vegasSign(name, sub) {
   return `<div class="vegas-sign">
     <div class="vegas-star">★</div>
@@ -1128,6 +1228,17 @@ function vegasSign(name, sub) {
       ${sub ? `<div class="vegas-sub">${sub}</div>` : ''}
     </div>
     <div class="vegas-pole"></div>
+  </div>`;
+}
+
+function retroSign(name) {
+  return `<div class="retro-sign">
+    <div class="retro-arrow">▼ ▼ ▼</div>
+    <div class="retro-body">
+      <div class="retro-name">🍦 ${name} 🍦</div>
+      <div class="retro-sub">Ice Cream &amp; Treats</div>
+    </div>
+    <div class="retro-pole"></div>
   </div>`;
 }
 
@@ -1140,7 +1251,7 @@ async function loadLocations() {
   // Kitchen marker
   L.circleMarker([data.warehouse.lat, data.warehouse.lng], {
     radius: 10, fillColor: '#fbbf24', color: '#fbbf24', fillOpacity: 0.3, weight: 2,
-  }).addTo(map).bindTooltip(vegasSign('🍦 ' + data.warehouse.label + ' 🍦', ''), {
+  }).addTo(map).bindTooltip(retroSign(data.warehouse.label), {
     permanent: true, direction: 'top', className: 'map-label', offset: [0, -10],
   });
 
