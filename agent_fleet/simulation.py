@@ -418,11 +418,18 @@ class FleetState:
             lines = ["=== Fleet Status ==="]
             for cid, c in self.crews.items():
                 orders_str = ", ".join(c.current_orders) if c.current_orders else "none"
+                disconnect_tag = " **DISCONNECTED**" if c.disconnected else ""
+                recovering_tag = " [recovering]" if c.recovering else ""
                 lines.append(
                     f"  {cid}: status={c.status.value}, "
                     f"cooler={c.cooler_status.value} ({c.cooler_temp_f:.0f}F), "
                     f"orders=[{orders_str}]"
+                    f"{disconnect_tag}{recovering_tag}"
                 )
+            lines.append("=== Agent Health ===")
+            for agent_name, online in self.agent_health.items():
+                status = "ONLINE" if online else "OFFLINE"
+                lines.append(f"  {agent_name}: {status}")
             lines.append("=== Orders ===")
             for oid, o in self.orders.items():
                 lines.append(
@@ -438,10 +445,15 @@ class FleetState:
         async with self._lock:
             lines = ["=== Order Priorities ==="]
             for oid, o in self.orders.items():
+                crew_status = ""
+                if o.assigned_crew_id:
+                    crew = self.crews.get(o.assigned_crew_id)
+                    if crew and crew.disconnected:
+                        crew_status = f" **CREW {o.assigned_crew_id} DISCONNECTED**"
                 lines.append(
                     f"  {oid}: {o.hotel} — {o.priority.value.upper()}, "
                     f"{o.servings} servings, deadline={o.deadline_minutes}min, "
-                    f"status={o.status.value}"
+                    f"status={o.status.value}{crew_status}"
                 )
             return "\n".join(lines)
 
