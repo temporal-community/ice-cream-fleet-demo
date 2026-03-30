@@ -658,10 +658,10 @@
 </header>
 
 <div class="tab-bar">
-  <button class="tab active" data-tab="crew" onclick="switchTab('crew')">Crew Disconnect</button>
-  <button class="tab" data-tab="agent" onclick="switchTab('agent')">Agent Disruption</button>
+  <button class="tab active" data-tab="agent" onclick="switchTab('agent')">Agent Disruption</button>
+  <button class="tab" data-tab="crew" onclick="switchTab('crew')">Crew Disconnect</button>
   <button class="tab" data-tab="customer" onclick="switchTab('customer')">Customer Change</button>
-  <button class="tab" data-tab="crash" onclick="switchTab('crash')">Full System Crash</button>
+  <button class="tab" data-tab="crash" onclick="switchTab('crash')">Full Service Crash</button>
   <div class="status-area">
     <div id="worker-status" class="worker-indicator online">
       <div class="worker-dot"></div>
@@ -670,18 +670,7 @@
   </div>
 </div>
 <div class="tab-panels">
-  <div class="tab-panel active" id="panel-crew">
-    <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
-    <select id="crew-disconnect-select" class="crew-select">
-      <option value="ai-crew-1">AI-Crew 1</option>
-      <option value="ai-crew-2">AI-Crew 2</option>
-      <option value="ai-crew-3">AI-Crew 3</option>
-    </select>
-    <button class="btn btn-crash" onclick="disconnectCrew()">Disconnect Crew</button>
-    <button class="btn btn-restart" onclick="reconnectCrew()">Reconnect Crew</button>
-    <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
-  </div>
-  <div class="tab-panel" id="panel-agent">
+  <div class="tab-panel active" id="panel-agent">
     <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
     <select id="agent-disconnect-select" class="agent-select">
       <option value="fleet_agent">Fleet Agent</option>
@@ -696,6 +685,17 @@
     <button class="btn btn-approve" id="btn-operator-approve" onclick="operatorDecision('approve')" style="display:none;">Approve Plan</button>
     <button class="btn btn-reject" id="btn-operator-reject" onclick="operatorDecision('reject')" style="display:none;">Reject Plan</button>
     <span id="operator-status" style="font-size:11px;color:#fbbf24;display:none;"></span>
+    <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
+  </div>
+  <div class="tab-panel" id="panel-crew">
+    <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
+    <select id="crew-disconnect-select" class="crew-select">
+      <option value="ai-crew-1">AI-Crew 1</option>
+      <option value="ai-crew-2">AI-Crew 2</option>
+      <option value="ai-crew-3">AI-Crew 3</option>
+    </select>
+    <button class="btn btn-crash" onclick="disconnectCrew()">Disconnect Crew</button>
+    <button class="btn btn-restart" onclick="reconnectCrew()">Reconnect Crew</button>
     <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
   </div>
   <div class="tab-panel" id="panel-crash">
