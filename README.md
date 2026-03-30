@@ -13,8 +13,7 @@ Three AI-Crews deliver VIP ice cream orders to hotels on the Strip. When things 
 | Scenario | What Happens | What It Shows |
 |----------|-------------|---------------|
 | **Crew Disconnect** | Take a single AI-Crew offline mid-delivery | Temporal retries activities indefinitely until reconnect — no work lost |
-| **Agent Disconnect** | Take an individual ADK agent offline | Remaining agents adapt reasoning — resolver compensates for missing input |
-| **Cooler Malfunction** | Trigger a cooler failure on an AI-Crew | Fleet Agent (with Maps routes) + Customer Agent (with hotel research) assess in parallel, Resolver synthesizes a recovery plan |
+| **Agent Disruption** | Take agents offline, then trigger a cooler failure | Agents adapt reasoning with missing peers — Fleet Agent avoids disconnected crews, Resolver compensates for offline agents |
 | **Customer Change** | Submit an address change or cancellation | Human-in-the-loop approval with agent reasoning |
 | **Full System Crash** | Kill the entire worker mid-delivery, restart it | Temporal replays workflow history — AI-Crews resume from exact position |
 
@@ -102,8 +101,7 @@ Navigate to http://localhost:8080
 
 1. **Start Deliveries** — 3 AI-Crews dispatch from Ice Cream Kitchen to MGM Grand, Caesars Palace, Mandalay Bay
 2. **Crew Disconnect** — Select an AI-Crew → disconnect → activities retry until reconnect → seamless resume
-3. **Agent Disconnect** — Take Fleet or Customer Agent offline → trigger disruption → remaining agents adapt reasoning
-4. **Cooler Malfunction** — Trigger disruption → Fleet Agent checks Maps routes → Hotel Researcher gathers event context → agents reason in parallel → recovery plan → orders rerouted
+3. **Agent Disruption** — Take agents offline → trigger cooler malfunction → Fleet Agent checks Maps routes (skipping disconnected crews) → Hotel Researcher gathers hotel context → remaining agents reason and compensate for offline peers → recovery plan
 5. **Customer Change** — Submit a change → agent evaluates → approve/reject → order updated
 6. **Full System Crash** — Kill the service mid-flight → red overlay → restart → blue "Replaying..." overlay → AI-Crews resume
 

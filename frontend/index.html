@@ -659,8 +659,7 @@
 
 <div class="tab-bar">
   <button class="tab active" data-tab="crew" onclick="switchTab('crew')">Crew Disconnect</button>
-  <button class="tab" data-tab="agent" onclick="switchTab('agent')">Agent Disconnect</button>
-  <button class="tab" data-tab="cooler" onclick="switchTab('cooler')">Cooler Malfunction</button>
+  <button class="tab" data-tab="agent" onclick="switchTab('agent')">Agent Disruption</button>
   <button class="tab" data-tab="customer" onclick="switchTab('customer')">Customer Change</button>
   <button class="tab" data-tab="crash" onclick="switchTab('crash')">Full System Crash</button>
   <div class="status-area">
@@ -689,24 +688,20 @@
       <option value="customer_agent">Customer Agent</option>
       <option value="resolver">Resolver</option>
     </select>
-    <button class="btn btn-crash" onclick="disconnectAgent()">Take Agent Offline</button>
-    <button class="btn btn-restart" onclick="reconnectAgent()">Bring Agent Online</button>
+    <button class="btn btn-crash" onclick="disconnectAgent()">Take Offline</button>
+    <button class="btn btn-restart" onclick="reconnectAgent()">Bring Online</button>
+    <span style="color:#444;margin:0 4px;">|</span>
     <button class="btn btn-disrupt" onclick="triggerDisruption()">Trigger Cooler Malfunction</button>
+    <button class="btn btn-inject" id="btn-inject" onclick="injectConditions()" style="display:none;">Inject New Conditions</button>
+    <button class="btn btn-approve" id="btn-operator-approve" onclick="operatorDecision('approve')" style="display:none;">Approve Plan</button>
+    <button class="btn btn-reject" id="btn-operator-reject" onclick="operatorDecision('reject')" style="display:none;">Reject Plan</button>
+    <span id="operator-status" style="font-size:11px;color:#fbbf24;display:none;"></span>
     <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
   </div>
   <div class="tab-panel" id="panel-crash">
     <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
     <button class="btn btn-crash" onclick="crashService()">Crash Entire Service</button>
     <button class="btn btn-restart" onclick="restartService()">Reconnect</button>
-    <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
-  </div>
-  <div class="tab-panel" id="panel-cooler">
-    <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
-    <button class="btn btn-disrupt" onclick="triggerDisruption()">Trigger Cooler Malfunction</button>
-    <button class="btn btn-inject" id="btn-inject" onclick="injectConditions()" style="display:none;">Inject New Conditions</button>
-    <button class="btn btn-approve" id="btn-operator-approve" onclick="operatorDecision('approve')" style="display:none;">Approve Plan</button>
-    <button class="btn btn-reject" id="btn-operator-reject" onclick="operatorDecision('reject')" style="display:none;">Reject Plan</button>
-    <span id="operator-status" style="font-size:11px;color:#fbbf24;display:none;"></span>
     <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
   </div>
   <div class="tab-panel" id="panel-customer">
