@@ -400,6 +400,10 @@ class MeltdownDemoWorkflow:
 
         route_handles = {}
         for i, (crew_id, order_ids) in enumerate(CREW_ASSIGNMENTS.items()):
+            if not order_ids:
+                workflow.logger.info(f"Skipping {crew_id} — no orders assigned")
+                continue
+
             if i > 0:
                 await workflow.sleep(timedelta(seconds=2))
 

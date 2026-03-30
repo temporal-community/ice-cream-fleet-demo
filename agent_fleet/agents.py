@@ -39,19 +39,12 @@ except ImportError:
     TemporalModel = activity_tool = None
     _TEMPORAL_ADK_AVAILABLE = False
 
-try:
-    from google.adk.tools import google_search
-
-    _GOOGLE_SEARCH_AVAILABLE = True
-except ImportError:
-    google_search = None
-    _GOOGLE_SEARCH_AVAILABLE = False
-
 from agent_fleet.activities import (
     tool_get_fleet_status,
     tool_get_order_priorities,
     tool_get_route_info,
     tool_publish_agent_event,
+    tool_search_hotel_context,
 )
 
 DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
@@ -96,6 +89,15 @@ _publish_event_tool = (
 _route_info_tool = (
     activity_tool(
         tool_get_route_info,
+        start_to_close_timeout=timedelta(seconds=15),
+        retry_policy=_TOOL_RETRY,
+    )
+    if _TEMPORAL_ADK_AVAILABLE
+    else None
+)
+_hotel_search_tool = (
+    activity_tool(
+        tool_search_hotel_context,
         start_to_close_timeout=timedelta(seconds=15),
         retry_policy=_TOOL_RETRY,
     )
@@ -172,19 +174,15 @@ def create_fleet_agent() -> Agent:
     )
 
 
-def create_hotel_researcher() -> Agent | None:
+def create_hotel_researcher() -> Agent:
     """
-    Hotel Researcher — uses Google Search to gather live context about
-    delivery destination hotels (events, occupancy, VIP considerations).
+    Hotel Researcher — searches for live context about delivery destination
+    hotels (events, occupancy, VIP considerations).
 
-    Uses google_search as its sole tool (Gemini constraint: google_search
-    cannot be combined with other tools in the same agent).
-
-    Returns None if google_search is not available.
+    Uses tool_search_hotel_context (activity-backed) which calls Google Custom
+    Search API when GOOGLE_CSE_ID is set, otherwise returns curated mock data.
+    Activity-backed = replay-safe (results stored in Temporal history).
     """
-    if not _GOOGLE_SEARCH_AVAILABLE or google_search is None:
-        return None
-
     return Agent(
         name="hotel_researcher",
         model=TemporalModel(DEFAULT_MODEL),
@@ -197,15 +195,13 @@ def create_hotel_researcher() -> Agent | None:
             "You are a Hotel Intelligence Researcher for Meltdown Ice Cream Delivery "
             "on the Las Vegas Strip.\n\n"
             "Your job is to quickly search for relevant context about the hotels "
-            "involved in the current delivery disruption. Search for:\n"
-            "- Current events at the affected hotels (conferences, pool parties, galas)\n"
-            "- Any VIP or celebrity presence that increases delivery urgency\n"
-            "- Hotel reputation and standards for catering service\n\n"
-            "Be concise. Return 2-3 bullet points per hotel with the most relevant "
-            "findings. Focus on information that would affect delivery priority.\n\n"
-            "Hotels on the Las Vegas Strip: MGM Grand, Caesars Palace, Mandalay Bay."
+            "involved in the current delivery disruption. Call tool_search_hotel_context "
+            "for each affected hotel to get live event data.\n\n"
+            "Hotels on the Las Vegas Strip: MGM Grand, Caesars Palace, Mandalay Bay.\n\n"
+            "Be concise. Summarize the most relevant findings that would affect "
+            "delivery priority — events, VIP presence, reputation."
         ),
-        tools=[google_search],
+        tools=[_hotel_search_tool],
         output_key="hotel_context",
     )
 
@@ -248,22 +244,16 @@ def create_customer_agent() -> Agent:
     )
 
 
-def create_customer_assessment_pipeline() -> SequentialAgent | Agent:
+def create_customer_assessment_pipeline() -> SequentialAgent:
     """
     Customer Assessment Pipeline — SequentialAgent that first researches hotels
-    via Google Search, then runs the Customer Agent with enriched context.
+    via search, then runs the Customer Agent with enriched context.
 
-    Falls back to standalone Customer Agent if google_search is unavailable.
+    Hotel Researcher is always available (activity-backed with mock fallback).
     """
-    hotel_researcher = create_hotel_researcher()
-
-    if hotel_researcher is None:
-        # google_search not available — run Customer Agent standalone
-        return create_customer_agent()
-
     return SequentialAgent(
         name="customer_assessment",
-        sub_agents=[hotel_researcher, create_customer_agent()],
+        sub_agents=[create_hotel_researcher(), create_customer_agent()],
     )
 
 

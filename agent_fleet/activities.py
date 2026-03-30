@@ -185,6 +185,92 @@ def _mock_route_info(
     )
 
 
+@activity.defn(name="tool_search_hotel_context")
+async def tool_search_hotel_context(hotel_name: str) -> str:
+    """Search for live context about a Las Vegas hotel — current events, VIP bookings, reputation.
+
+    Use this to understand delivery urgency for a specific hotel destination.
+
+    Args:
+        hotel_name: Name of the hotel (e.g. "MGM Grand", "Caesars Palace", "Mandalay Bay")
+    """
+    return await _search_hotel_context(hotel_name)
+
+
+async def _search_hotel_context(hotel_name: str) -> str:
+    """Search for hotel context — tries Google Search API, falls back to mock.
+
+    This is the shared implementation used by both the tool_search_hotel_context
+    activity and the mock resolver. Separated so it can be called from within
+    another activity (activities can't call other activities via Temporal).
+    """
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    search_engine_id = os.environ.get("GOOGLE_CSE_ID")
+
+    if api_key and search_engine_id:
+        try:
+            query = f"{hotel_name} Las Vegas current events today"
+            url = "https://www.googleapis.com/customsearch/v1"
+            params = {
+                "key": api_key,
+                "cx": search_engine_id,
+                "q": query,
+                "num": 3,
+            }
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+
+            items = data.get("items", [])
+            if items:
+                results = []
+                for item in items[:3]:
+                    title = item.get("title", "")
+                    snippet = item.get("snippet", "")
+                    results.append(f"- {title}: {snippet}")
+                return f"Live search results for {hotel_name}:\n" + "\n".join(results)
+        except Exception:
+            pass
+
+    return _mock_hotel_context(hotel_name)
+
+
+def _mock_hotel_context(hotel_name: str) -> str:
+    """Deterministic mock hotel context for demo without Search API."""
+    contexts = {
+        "MGM Grand": (
+            f"- {hotel_name}: Currently hosting Wet Republic pool party series. "
+            f"High guest volume with VIP catering expectations.\n"
+            f"- {hotel_name}: Grand Garden Arena has a major event tonight — "
+            f"hotel is at peak occupancy with elevated service standards.\n"
+            f"- {hotel_name}: Known for premium poolside dining — late catering "
+            f"deliveries have resulted in vendor penalties in the past."
+        ),
+        "Caesars Palace": (
+            f"- {hotel_name}: Banquet halls booked for a corporate gala tonight. "
+            f"Caesars is known for premium event standards.\n"
+            f"- {hotel_name}: The Forum Shops are running a VIP shopping event — "
+            f"hotel staff are stretched thin, on-time delivery is critical.\n"
+            f"- {hotel_name}: Colosseum show tonight means 4,000+ guests on property. "
+            f"Late delivery would damage vendor relationship."
+        ),
+        "Mandalay Bay": (
+            f"- {hotel_name}: Tech conference in session at the Convention Center. "
+            f"Conference catering is time-sensitive — dessert course is scheduled.\n"
+            f"- {hotel_name}: Shark Reef and pool areas at capacity — resort is in "
+            f"peak weekend mode with premium service expectations.\n"
+            f"- {hotel_name}: Convention Center hosts 10,000+ attendees — "
+            f"catering delays would be visible to a large audience."
+        ),
+    }
+    # Fuzzy match hotel name
+    for key, context in contexts.items():
+        if key.lower() in hotel_name.lower() or hotel_name.lower() in key.lower():
+            return f"Hotel intelligence for {hotel_name}:\n{context}"
+    return f"No specific intelligence available for {hotel_name}."
+
+
 # --- Core delivery activities ---
 
 
@@ -669,33 +755,19 @@ async def resolve_disruption_mock(
             total_servings += order.servings
 
     if customer_online:
-        # Simulate Hotel Researcher sub-agent (google_search)
+        # Hotel research — calls Google Search API if available, otherwise mock
         hotel_names = [o.hotel for o in order_details if o]
         hotel_context_lines = []
         for hotel in hotel_names:
-            if "MGM" in hotel:
-                hotel_context_lines.append(
-                    f"- {hotel}: Currently hosting a major pool party series "
-                    f"(Wet Republic). High guest volume, VIP catering expectations."
-                )
-            elif "Caesars" in hotel:
-                hotel_context_lines.append(
-                    f"- {hotel}: Banquet halls booked for a corporate gala tonight. "
-                    f"Caesars is known for premium event standards — late delivery "
-                    f"would damage vendor relationship."
-                )
-            elif "Mandalay" in hotel:
-                hotel_context_lines.append(
-                    f"- {hotel}: Tech conference in session at the Convention Center. "
-                    f"Conference catering is time-sensitive — dessert course is scheduled."
-                )
+            context = await _search_hotel_context(hotel)
+            hotel_context_lines.append(context)
         hotel_context = "\n".join(hotel_context_lines)
 
         if hotel_context:
             await fleet.publish_agent_event(
                 "customer_agent",
                 "tool_call",
-                f"Hotel Researcher (google_search) gathered live context:\n\n"
+                f"Hotel Researcher (search) gathered live context:\n\n"
                 f"{hotel_context}",
                 summary="Hotel research complete — live event context gathered",
             )

@@ -62,9 +62,9 @@ Three AI-Crews deliver VIP ice cream orders to hotels on the Strip. When things 
 | Tool | Agent | Integration | Purpose |
 |------|-------|-------------|---------|
 | **Google Maps Directions** | Fleet Agent | Activity-backed (`activity_tool`) — replay-safe | Driving routes and ETAs for reroute assessment |
-| **Google Search** | Hotel Researcher | Built-in ADK tool (`google_search`) | Live hotel event context (conferences, VIP bookings) |
+| **Hotel Search** | Hotel Researcher | Activity-backed (`activity_tool`) — replay-safe | Live hotel event context (conferences, VIP bookings) |
 
-The Fleet Agent's Maps tool is wrapped as a Temporal activity — if the worker crashes mid-call, the result is replayed from history. Google Search runs in a dedicated Hotel Researcher sub-agent (Gemini constraint: `google_search` cannot be combined with other tools in the same agent). The Hotel Researcher writes `hotel_context` to ADK session state, which the Customer Agent reads to enrich its assessment.
+Both tools are wrapped as Temporal activities — if the worker crashes mid-call, results are replayed from history. Hotel Search calls Google Custom Search API when `GOOGLE_CSE_ID` is set, otherwise returns curated mock data so the demo always shows hotel intelligence. The Hotel Researcher writes `hotel_context` to ADK session state, which the Customer Agent reads to enrich its assessment.
 
 ## Prerequisites
 
@@ -72,8 +72,9 @@ The Fleet Agent's Maps tool is wrapped as a Temporal activity — if the worker 
 - [Temporal CLI](https://docs.temporal.io/cli) (`brew install temporal`)
 - Google Gemini API key (for ADK agents; falls back to mock mode without it)
 - Google Maps API key (optional — falls back to mock route data)
+- Google Custom Search Engine ID (optional — falls back to curated hotel data)
 
-Both API keys fall back gracefully: without `GOOGLE_API_KEY`, agents use deterministic mock reasoning. Without `GOOGLE_MAPS_API_KEY`, route checks use calculated distance/ETA estimates.
+All API keys fall back gracefully: without `GOOGLE_API_KEY`, agents use deterministic mock reasoning. Without `GOOGLE_MAPS_API_KEY`, route checks use calculated distance/ETA estimates. Without `GOOGLE_CSE_ID`, hotel research uses curated Las Vegas hotel context.
 
 ## Quick Start
 
@@ -89,6 +90,7 @@ temporal server start-dev
 pip install -e ".[dev]"
 echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
 echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional
+echo 'export GOOGLE_CSE_ID="your-cse-id"' >> .env  # optional
 ./run.sh
 ```
 
