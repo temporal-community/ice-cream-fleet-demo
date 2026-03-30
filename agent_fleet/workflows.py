@@ -207,7 +207,7 @@ class CrewRouteWorkflow:
                     target_lat=order.delivery_lat,
                     target_lng=order.delivery_lng,
                     leg="delivery",
-                    steps=10,
+                    steps=30,
                     waypoints=delivery_waypoints,
                 ),
                 schedule_to_close_timeout=timedelta(minutes=10),
@@ -232,6 +232,62 @@ class CrewRouteWorkflow:
             if self._extra_orders:
                 all_orders.extend(self._extra_orders)
                 self._extra_orders.clear()
+
+        # Wait briefly for any rerouted orders that arrive after main loop
+        if not self._return_to_base and not self._extra_orders:
+            try:
+                await workflow.wait_condition(
+                    lambda: len(self._extra_orders) > 0 or self._return_to_base,
+                    timeout=timedelta(seconds=30),
+                )
+            except TimeoutError:
+                pass
+
+        # Deliver any rerouted orders
+        while self._extra_orders:
+            extra = list(self._extra_orders)
+            self._extra_orders.clear()
+            for order in extra:
+                if self._return_to_base:
+                    break
+
+                delivery_waypoints = await workflow.execute_activity(
+                    get_route_polyline,
+                    args=[
+                        current_lat, current_lng,
+                        order.delivery_lat, order.delivery_lng,
+                    ],
+                    schedule_to_close_timeout=timedelta(minutes=5),
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=FAST_RETRY,
+                )
+
+                await workflow.execute_activity(
+                    navigate_to,
+                    NavigateInput(
+                        crew_id=crew_id,
+                        order_id=order.order_id,
+                        target_lat=order.delivery_lat,
+                        target_lng=order.delivery_lng,
+                        leg="delivery",
+                        steps=30,
+                        waypoints=delivery_waypoints,
+                    ),
+                    schedule_to_close_timeout=timedelta(minutes=10),
+                    start_to_close_timeout=timedelta(seconds=120),
+                    heartbeat_timeout=timedelta(seconds=15),
+                    retry_policy=NAV_RETRY,
+                )
+                current_lat, current_lng = order.delivery_lat, order.delivery_lng
+
+                await workflow.execute_activity(
+                    deliver_order,
+                    DeliverInput(crew_id=crew_id, order_id=order.order_id),
+                    schedule_to_close_timeout=timedelta(minutes=5),
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=FAST_RETRY,
+                )
+                delivered.append(order.order_id)
 
         return f"AI-Crew {crew_id} completed {len(delivered)} deliveries: {delivered}"
 

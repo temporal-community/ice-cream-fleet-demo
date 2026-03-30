@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Meltdown — Ice Cream Delivery Fleet</title>
 <link rel="stylesheet" href="/static/vendor/leaflet.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Monoton&display=swap" rel="stylesheet">
 <script src="/static/vendor/leaflet.js"></script>
 <style>
   /* --- Brand palette --- */
@@ -58,7 +60,17 @@
     font-weight: 700;
     color: #fff;
   }
-  header h1 .accent { color: var(--temporal-uv); }
+  header h1 .accent {
+    font-family: 'Monoton', cursive;
+    font-size: 22px;
+    font-weight: 400;
+    color: #ff2a6d;
+    text-shadow:
+      0 0 7px #ff2a6d,
+      0 0 20px #ff2a6d88,
+      0 0 40px #ff2a6d44;
+    letter-spacing: 2px;
+  }
   header h1 .sub { color: var(--text-muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
   .header-right {
     display: flex;
@@ -502,6 +514,74 @@
   #map {
     background: #1a1d28;
     border-left: 1px solid var(--border);
+  }
+  .crew-marker {
+    background: none !important;
+    border: none !important;
+  }
+
+  /* --- Iconic Vegas sign map labels --- */
+  .map-label {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    white-space: nowrap !important;
+    pointer-events: none;
+  }
+  .map-label::before {
+    display: none !important;
+  }
+
+  .vegas-sign {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
+  }
+  .vegas-star {
+    font-size: 14px;
+    color: #ffe14d;
+    text-shadow: 0 0 8px #ffe14d88;
+    line-height: 1;
+    margin-bottom: -3px;
+    z-index: 1;
+  }
+  .vegas-diamond {
+    background: linear-gradient(135deg, #c41e3a 0%, #e8273b 50%, #c41e3a 100%);
+    border: 2px solid #ffe14d;
+    border-radius: 2px;
+    padding: 4px 12px 3px;
+    text-align: center;
+    clip-path: polygon(50% 0%, 100% 15%, 100% 85%, 50% 100%, 0% 85%, 0% 15%);
+    min-width: 70px;
+    padding: 10px 16px 8px;
+  }
+  .vegas-name {
+    font-family: 'Monoton', cursive;
+    font-size: 9px;
+    font-weight: 400;
+    color: #ffe14d;
+    text-shadow: 0 0 4px #ffe14d66;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .vegas-sub {
+    font-family: -apple-system, sans-serif;
+    font-size: 7px;
+    color: #fff;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-top: 1px;
+    opacity: 0.9;
+  }
+  .vegas-pole {
+    width: 2px;
+    height: 8px;
+    background: linear-gradient(to bottom, #888, #555);
+    border-radius: 1px;
   }
 
   /* --- Map style picker --- */
@@ -996,21 +1076,34 @@ styleControl.onAdd = function() {
 };
 styleControl.addTo(map);
 
-// --- Courier icons ---
-function crewIcon(color, hasAlert) {
-  const alertRing = hasAlert
-    ? `<circle cx="16" cy="16" r="14" fill="none" stroke="#ef4444" stroke-width="2" opacity="0.8"><animate attributeName="r" from="14" to="18" dur="1s" repeatCount="indefinite"/><animate attributeName="opacity" from="0.8" to="0" dur="1s" repeatCount="indefinite"/></circle>`
+// --- Ice cream truck icons ---
+const prevPositions = {};
+
+function getBearing(prev, curr) {
+  const dLng = (curr[1] - prev[1]) * Math.PI / 180;
+  const lat1 = prev[0] * Math.PI / 180;
+  const lat2 = curr[0] * Math.PI / 180;
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function crewIcon(color, hasAlert, bearing) {
+  // Flip truck emoji when heading left (west-ish: 180-360 degrees)
+  const flip = typeof bearing === 'number' && bearing > 135 && bearing < 315;
+  const alertDot = hasAlert
+    ? `<div style="position:absolute;top:-4px;right:-4px;width:12px;height:12px;background:#ef4444;border-radius:50%;border:2px solid #fff;animation:pulse 1s infinite;z-index:10;"></div>`
     : '';
   return L.divIcon({
     className: 'crew-marker',
-    html: `<svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-      ${alertRing}
-      <circle cx="18" cy="18" r="10" fill="${color}" opacity="0.25"/>
-      <circle cx="18" cy="18" r="5" fill="${color}"/>
-      <circle cx="18" cy="18" r="2" fill="#fff"/>
-    </svg>`,
-    iconSize: [36, 36],
-    iconAnchor: [18, 18],
+    html: `<div style="position:relative;width:52px;height:44px;">
+      ${alertDot}
+      <div style="position:absolute;top:-4px;left:50%;transform:translateX(-50%);font-size:22px;line-height:1;z-index:2;">🍦</div>
+      <div style="margin-top:14px;font-size:28px;line-height:1;text-align:center;${flip ? 'transform:scaleX(-1);' : ''}">🚚</div>
+      <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:36px;height:4px;background:${color};border-radius:2px;opacity:0.8;"></div>
+    </div>`,
+    iconSize: [52, 44],
+    iconAnchor: [26, 22],
   });
 }
 
@@ -1026,6 +1119,18 @@ const CREW_COLORS = {
   disconnected: '#ef4444',
 };
 
+// --- Vegas sign tooltip ---
+function vegasSign(name, sub) {
+  return `<div class="vegas-sign">
+    <div class="vegas-star">★</div>
+    <div class="vegas-diamond">
+      <div class="vegas-name">${name}</div>
+      ${sub ? `<div class="vegas-sub">${sub}</div>` : ''}
+    </div>
+    <div class="vegas-pole"></div>
+  </div>`;
+}
+
 // --- Load locations ---
 let DESTINATIONS = {};
 async function loadLocations() {
@@ -1035,8 +1140,8 @@ async function loadLocations() {
   // Kitchen marker
   L.circleMarker([data.warehouse.lat, data.warehouse.lng], {
     radius: 10, fillColor: '#fbbf24', color: '#fbbf24', fillOpacity: 0.3, weight: 2,
-  }).addTo(map).bindTooltip(data.warehouse.label, {
-    permanent: true, direction: 'top', className: 'map-label',
+  }).addTo(map).bindTooltip(vegasSign('🍦 ' + data.warehouse.label + ' 🍦', ''), {
+    permanent: true, direction: 'top', className: 'map-label', offset: [0, -10],
   });
 
   // Hotel markers
@@ -1044,8 +1149,8 @@ async function loadLocations() {
     DESTINATIONS[oid] = d;
     L.circleMarker([d.lat, d.lng], {
       radius: 7, fillColor: '#f97316', color: '#f97316', fillOpacity: 0.3, weight: 2,
-    }).addTo(map).bindTooltip(d.label, {
-      permanent: true, direction: 'top', className: 'map-label',
+    }).addTo(map).bindTooltip(vegasSign(d.map_label, d.sub || ''), {
+      permanent: true, direction: 'top', className: 'map-label', offset: [0, -10],
     });
   });
 }
@@ -1082,15 +1187,23 @@ function updateCrews(crews) {
     const color = CREW_COLORS[c.status] || '#94a3b8';
     const hasAlert = c.cooler_status === 'malfunction' || c.cooler_status === 'failed';
 
+    // Calculate bearing from previous position
+    let bearing = prevPositions[c.crew_id]?.bearing || 0;
+    const prev = prevPositions[c.crew_id]?.pos;
+    if (prev && (prev[0] !== pos[0] || prev[1] !== pos[1])) {
+      bearing = getBearing(prev, pos);
+    }
+    prevPositions[c.crew_id] = { pos, bearing };
+
     if (!crewMarkers[c.crew_id]) {
-      crewMarkers[c.crew_id] = L.marker(pos, { icon: crewIcon(color, hasAlert) }).addTo(map);
-      crewMarkers[c.crew_id].bindTooltip(c.crew_id, { direction: 'top', offset: [0, -18] });
+      crewMarkers[c.crew_id] = L.marker(pos, { icon: crewIcon(color, hasAlert, bearing) }).addTo(map);
+      crewMarkers[c.crew_id].bindTooltip(c.crew_id, { direction: 'top', offset: [0, -24] });
       crewTrails[c.crew_id] = L.polyline([], {
         color, weight: 2, opacity: 0.4, dashArray: '4 6',
       }).addTo(map);
     } else {
       crewMarkers[c.crew_id].setLatLng(pos);
-      crewMarkers[c.crew_id].setIcon(crewIcon(color, hasAlert));
+      crewMarkers[c.crew_id].setIcon(crewIcon(color, hasAlert, bearing));
     }
 
     if (c.path_history && c.path_history.length > 0) {

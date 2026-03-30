@@ -546,6 +546,8 @@ async def get_locations():
                 "lat": info["coords"].lat,
                 "lng": info["coords"].lng,
                 "label": info["map_label"],
+                "map_label": info["map_label"],
+                "sub": "",
                 "hotel": info["hotel"],
             }
             for oid, info in DELIVERY_DESTINATIONS.items()

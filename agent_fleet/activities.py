@@ -65,17 +65,85 @@ _STRIP_POINTS = {
 }
 
 # Intermediate points along Las Vegas Blvd from warehouse heading south
+# Las Vegas Blvd S — anchor points verified against map tiles + interpolated
+# The strip runs SSE from Venetian, bends at Flamingo, then curves SW to Mandalay
+# Coordinates placed ON the road centerline as shown on CartoDB/Stadia tiles
 _STRIP_CORRIDOR = [
-    (36.1280, -115.1520),  # Warehouse (east of strip)
-    (36.1250, -115.1580),  # Heading west toward the Strip
-    (36.1220, -115.1640),  # Approaching Las Vegas Blvd
-    (36.1190, -115.1700),  # On the Strip near Venetian
-    (36.1162, -115.1745),  # Caesars Palace
-    (36.1120, -115.1730),  # South of Caesars, near Bellagio
-    (36.1070, -115.1720),  # Near CityCenter
-    (36.1024, -115.1696),  # MGM Grand
-    (36.0970, -115.1730),  # South of MGM
-    (36.0919, -115.1761),  # Mandalay Bay
+    # Venetian / Palazzo — LV Blvd here is at ~-115.1710
+    (36.12200, -115.17100),
+    (36.12150, -115.17105),
+    (36.12100, -115.17110),
+    (36.12050, -115.17120),
+    (36.12000, -115.17130),
+    # LINQ / Harrah's
+    (36.11950, -115.17150),
+    (36.11900, -115.17170),
+    (36.11850, -115.17200),
+    (36.11800, -115.17220),
+    # Flamingo intersection — road at ~-115.1726
+    (36.11750, -115.17240),
+    (36.11700, -115.17260),
+    # Caesars Palace (marker: 36.1162, -115.1745)
+    (36.11670, -115.17300),
+    (36.11650, -115.17350),
+    (36.11620, -115.17450),  # Caesars marker
+    (36.11580, -115.17460),
+    (36.11540, -115.17470),
+    # Bellagio — road at ~-115.1742
+    (36.11500, -115.17420),
+    (36.11450, -115.17410),
+    (36.11400, -115.17400),
+    (36.11350, -115.17390),
+    (36.11300, -115.17380),
+    (36.11250, -115.17370),
+    (36.11200, -115.17360),
+    # Cosmopolitan — Milk Bar (marker: 36.1094, -115.1735)
+    (36.11150, -115.17355),
+    (36.11100, -115.17350),
+    (36.11050, -115.17350),
+    (36.11000, -115.17350),
+    (36.10940, -115.17350),  # Milk Bar
+    # CityCenter / Aria — road bends slightly east
+    (36.10880, -115.17340),
+    (36.10830, -115.17330),
+    (36.10780, -115.17310),
+    (36.10730, -115.17300),
+    (36.10680, -115.17290),
+    (36.10630, -115.17280),
+    # Park MGM
+    (36.10580, -115.17270),
+    (36.10530, -115.17265),
+    (36.10480, -115.17260),
+    (36.10430, -115.17255),
+    # Tropicana / MGM Grand (marker: 36.1024, -115.1725)
+    (36.10380, -115.17250),
+    (36.10330, -115.17250),
+    (36.10280, -115.17250),
+    (36.10240, -115.17250),  # MGM Grand marker
+    (36.10200, -115.17250),
+    (36.10150, -115.17260),
+    (36.10100, -115.17270),
+    (36.10050, -115.17290),
+    # South of MGM — road curves southwest
+    (36.10000, -115.17310),
+    (36.09950, -115.17330),
+    (36.09900, -115.17360),
+    (36.09850, -115.17390),
+    (36.09800, -115.17420),
+    # Excalibur / Luxor
+    (36.09750, -115.17450),
+    (36.09700, -115.17480),
+    (36.09650, -115.17500),
+    (36.09600, -115.17520),
+    (36.09550, -115.17540),
+    (36.09500, -115.17560),
+    # Mandalay Bay approach (marker: 36.0919, -115.1761)
+    (36.09450, -115.17570),
+    (36.09400, -115.17580),
+    (36.09350, -115.17590),
+    (36.09300, -115.17600),
+    (36.09250, -115.17610),
+    (36.09190, -115.17610),  # Mandalay Bay marker
 ]
 
 
@@ -645,8 +713,8 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
         # Track nav steps for demo event triggers (cooler malfunction)
         await fleet.increment_nav_step(inp.crew_id)
 
-        # Simulate flight time — 0.8s per step
-        await asyncio.sleep(0.8)
+        # Simulate drive time per step
+        await asyncio.sleep(0.4)
 
     activity.logger.info(
         f"{inp.crew_id} arrived at {leg} ({inp.target_lat:.4f}, {inp.target_lng:.4f})"

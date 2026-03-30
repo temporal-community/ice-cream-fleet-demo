@@ -15,7 +15,7 @@ DELIVERY_DESTINATIONS = {
     "order-1": {
         "hotel": "MGM Grand",
         "label": "MGM Grand pool party — 150 servings",
-        "coords": Coords(lat=36.1024, lng=-115.1696),
+        "coords": Coords(lat=36.1024, lng=-115.1725),
         "map_label": "MGM Grand",
         "priority": "vip",
         "servings": 150,
