@@ -12,6 +12,7 @@ Each activity is a discrete, retryable unit of work. Activities handle:
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 
 import httpx
@@ -52,6 +53,169 @@ from agent_fleet.models import (
     RunDisruptionResolverOutput,
 )
 from agent_fleet.simulation import fleet
+
+# --- Polyline decoding and route fetching ---
+
+# Known locations for mock waypoint generation (Las Vegas Strip)
+_STRIP_POINTS = {
+    "warehouse": (36.1280, -115.1520),
+    "caesars": (36.1162, -115.1745),
+    "mgm": (36.1024, -115.1696),
+    "mandalay": (36.0919, -115.1761),
+}
+
+# Intermediate points along Las Vegas Blvd from warehouse heading south
+_STRIP_CORRIDOR = [
+    (36.1280, -115.1520),  # Warehouse (east of strip)
+    (36.1250, -115.1580),  # Heading west toward the Strip
+    (36.1220, -115.1640),  # Approaching Las Vegas Blvd
+    (36.1190, -115.1700),  # On the Strip near Venetian
+    (36.1162, -115.1745),  # Caesars Palace
+    (36.1120, -115.1730),  # South of Caesars, near Bellagio
+    (36.1070, -115.1720),  # Near CityCenter
+    (36.1024, -115.1696),  # MGM Grand
+    (36.0970, -115.1730),  # South of MGM
+    (36.0919, -115.1761),  # Mandalay Bay
+]
+
+
+def decode_polyline(encoded: str) -> list[tuple[float, float]]:
+    """Decode a Google Maps encoded polyline string into (lat, lng) tuples."""
+    points = []
+    index = 0
+    lat = 0
+    lng = 0
+
+    while index < len(encoded):
+        # Decode latitude
+        shift = 0
+        result = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlat = ~(result >> 1) if (result & 1) else (result >> 1)
+        lat += dlat
+
+        # Decode longitude
+        shift = 0
+        result = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlng = ~(result >> 1) if (result & 1) else (result >> 1)
+        lng += dlng
+
+        points.append((lat / 1e5, lng / 1e5))
+
+    return points
+
+
+def _mock_route_waypoints(
+    origin_lat: float,
+    origin_lng: float,
+    dest_lat: float,
+    dest_lng: float,
+) -> list[dict[str, float]]:
+    """Generate mock waypoints that follow the Las Vegas Strip corridor.
+
+    Finds the closest corridor points to origin and destination, then returns
+    the slice of the corridor between them (plus origin/dest endpoints).
+    """
+
+    def _closest_corridor_idx(lat: float, lng: float) -> int:
+        best_idx = 0
+        best_dist = float("inf")
+        for i, (clat, clng) in enumerate(_STRIP_CORRIDOR):
+            d = math.sqrt((lat - clat) ** 2 + (lng - clng) ** 2)
+            if d < best_dist:
+                best_dist = d
+                best_idx = i
+        return best_idx
+
+    start_idx = _closest_corridor_idx(origin_lat, origin_lng)
+    end_idx = _closest_corridor_idx(dest_lat, dest_lng)
+
+    # Build waypoints: origin -> corridor slice -> destination
+    waypoints = [{"lat": origin_lat, "lng": origin_lng}]
+
+    if start_idx <= end_idx:
+        corridor_slice = _STRIP_CORRIDOR[start_idx : end_idx + 1]
+    else:
+        corridor_slice = list(reversed(_STRIP_CORRIDOR[end_idx : start_idx + 1]))
+
+    for clat, clng in corridor_slice:
+        # Skip if too close to origin (already added)
+        if len(waypoints) == 1:
+            d = math.sqrt((clat - origin_lat) ** 2 + (clng - origin_lng) ** 2)
+            if d < 0.0005:
+                continue
+        waypoints.append({"lat": clat, "lng": clng})
+
+    # Add final destination if not already close to last waypoint
+    last = waypoints[-1]
+    d = math.sqrt((dest_lat - last["lat"]) ** 2 + (dest_lng - last["lng"]) ** 2)
+    if d > 0.0005:
+        waypoints.append({"lat": dest_lat, "lng": dest_lng})
+
+    return waypoints
+
+
+@activity.defn(name="get_route_polyline")
+async def get_route_polyline(
+    origin_lat: float,
+    origin_lng: float,
+    dest_lat: float,
+    dest_lng: float,
+) -> list[dict[str, float]]:
+    """Fetch route waypoints from Google Maps Directions API (decoded polyline).
+
+    Returns a list of {"lat": float, "lng": float} waypoints.
+    Falls back to mock corridor waypoints if no API key is set.
+    """
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+
+    if not api_key:
+        return _mock_route_waypoints(origin_lat, origin_lng, dest_lat, dest_lng)
+
+    origin = f"{origin_lat},{origin_lng}"
+    destination = f"{dest_lat},{dest_lng}"
+    url = "https://maps.googleapis.com/maps/api/directions/json"
+    params = {
+        "origin": origin,
+        "destination": destination,
+        "key": api_key,
+        "mode": "driving",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+        if data.get("status") != "OK" or not data.get("routes"):
+            activity.logger.warning(
+                f"Maps API status for polyline: {data.get('status')}, using mock"
+            )
+            return _mock_route_waypoints(origin_lat, origin_lng, dest_lat, dest_lng)
+
+        # Decode the overview polyline
+        encoded = data["routes"][0]["overview_polyline"]["points"]
+        decoded = decode_polyline(encoded)
+        return [{"lat": lat, "lng": lng} for lat, lng in decoded]
+
+    except Exception as e:
+        activity.logger.warning(f"Maps polyline API error, using mock: {e}")
+        return _mock_route_waypoints(origin_lat, origin_lng, dest_lat, dest_lng)
+
 
 # --- Flat-signature tool activities (called by ADK agents via activity_tool) ---
 
@@ -131,6 +295,8 @@ async def tool_get_route_info(
         leg = route["legs"][0]
         distance = leg["distance"]["text"]
         duration = leg["duration"]["text"]
+        # Duration in minutes for structured agent reasoning
+        eta_minutes = max(1, leg["duration"]["value"] // 60)
 
         steps = []
         for i, step in enumerate(leg["steps"][:5], 1):
@@ -147,6 +313,7 @@ async def tool_get_route_info(
             f"Route to {dest_label}:\n"
             f"  Distance: {distance}\n"
             f"  ETA: {duration}\n"
+            f"  ETA_MINUTES: {eta_minutes}\n"
             f"  Key directions:\n{steps_text}"
         )
 
@@ -165,8 +332,6 @@ def _mock_route_info(
     dest_name: str,
 ) -> str:
     """Deterministic mock route info for demo without Maps API key."""
-    import math
-
     dlat = dest_lat - origin_lat
     dlng = dest_lng - origin_lng
     # Rough distance in miles (Las Vegas scale)
@@ -178,9 +343,10 @@ def _mock_route_info(
         f"Route to {dest_label}:\n"
         f"  Distance: {dist_miles:.1f} mi\n"
         f"  ETA: {eta_minutes} mins\n"
+        f"  ETA_MINUTES: {eta_minutes}\n"
         f"  Key directions:\n"
         f"    1. Head south on Las Vegas Blvd (0.5 mi)\n"
-        f"    2. Continue on Las Vegas Blvd S ({dist_miles - 0.5:.1f} mi)\n"
+        f"    2. Continue on Las Vegas Blvd S ({max(0.1, dist_miles - 0.5):.1f} mi)\n"
         f"    3. Arrive at {dest_label}"
     )
 
@@ -429,6 +595,24 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
 
     start_lat, start_lng = await fleet.get_crew_position(inp.crew_id)
 
+    # Build the path to interpolate along
+    if inp.waypoints and len(inp.waypoints) >= 2:
+        # Follow waypoint path from Google Maps polyline (or mock corridor)
+        path = [(wp["lat"], wp["lng"]) for wp in inp.waypoints]
+    else:
+        # Straight line fallback (backwards compat)
+        path = [(start_lat, start_lng), (inp.target_lat, inp.target_lng)]
+
+    # Calculate cumulative distances along the path for proportional interpolation
+    segment_dists = []
+    for i in range(1, len(path)):
+        d = math.sqrt(
+            (path[i][0] - path[i - 1][0]) ** 2
+            + (path[i][1] - path[i - 1][1]) ** 2
+        )
+        segment_dists.append(d)
+    total_dist = sum(segment_dists) or 1e-9
+
     for step in range(1, inp.steps + 1):
         activity.heartbeat(f"step {step}/{inp.steps}")
 
@@ -439,9 +623,22 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
                 f"AI-Crew {inp.crew_id} disconnected mid-navigation at step {step}"
             )
 
+        # Find position along the polyline path at this fraction
         fraction = step / inp.steps
-        new_lat = start_lat + (inp.target_lat - start_lat) * fraction
-        new_lng = start_lng + (inp.target_lng - start_lng) * fraction
+        target_dist = fraction * total_dist
+
+        # Walk along segments to find the interpolation point
+        accumulated = 0.0
+        new_lat, new_lng = path[-1]  # default to end
+        for i, seg_d in enumerate(segment_dists):
+            if accumulated + seg_d >= target_dist:
+                # Interpolate within this segment
+                remaining = target_dist - accumulated
+                seg_frac = remaining / seg_d if seg_d > 0 else 1.0
+                new_lat = path[i][0] + (path[i + 1][0] - path[i][0]) * seg_frac
+                new_lng = path[i][1] + (path[i + 1][1] - path[i][1]) * seg_frac
+                break
+            accumulated += seg_d
 
         await fleet.update_crew_position(inp.crew_id, new_lat, new_lng)
 
@@ -693,20 +890,47 @@ async def resolve_disruption_mock(
         events_published += 1
         await asyncio.sleep(0.4)
 
-        # Simulate Maps API route check
+        # Check Maps route ETAs from backup crew to each affected delivery location
+        backup_lat = backup_crew.position.lat if backup_crew else 36.1280
+        backup_lng = backup_crew.position.lng if backup_crew else -115.1520
+
+        eta_lines = []
+        for oid in inp.affected_order_ids:
+            order = await fleet.get_order(oid)
+            if order:
+                route_info_text = _mock_route_info(
+                    backup_lat,
+                    backup_lng,
+                    order.delivery_coords.lat,
+                    order.delivery_coords.lng,
+                    order.hotel,
+                )
+                # Extract ETA_MINUTES from the structured field
+                eta_min = "?"
+                for line in route_info_text.split("\n"):
+                    if "ETA_MINUTES:" in line:
+                        eta_min = line.split("ETA_MINUTES:")[1].strip()
+                        break
+                eta_lines.append(f"  - {crew_id} -> {order.hotel} ({oid}): ~{eta_min} min")
+
+        # Also get a summary route from backup to the failed crew's area
         route_info = _mock_route_info(
-            backup_crew.position.lat if backup_crew else 36.1280,
-            backup_crew.position.lng if backup_crew else -115.1520,
+            backup_lat,
+            backup_lng,
             failed_crew.position.lat if failed_crew else 36.1024,
             failed_crew.position.lng if failed_crew else -115.1696,
             inp.disruption_crew_id,
         )
+        eta_comparison = "\n".join(eta_lines) if eta_lines else "  (no delivery ETAs available)"
+
         await fleet.publish_agent_event(
             "fleet_agent",
             "tool_call",
-            f"Calling tool_get_route_info to check driving route from "
-            f"{crew_id} to affected delivery area...\n\n{route_info}",
-            summary=f"Checking route from {crew_id}...",
+            f"Calling tool_get_route_info to check driving routes from "
+            f"{crew_id} to affected delivery locations...\n\n"
+            f"Route to failed crew area:\n{route_info}\n\n"
+            f"Delivery ETAs from {crew_id}:\n{eta_comparison}",
+            summary=f"Checking routes from {crew_id} — ETAs calculated",
         )
         events_published += 1
         await asyncio.sleep(0.3)
@@ -719,8 +943,8 @@ async def resolve_disruption_mock(
             f"- {crew_id} is the best reroute candidate — "
             f"cooler is nominal, {backup_capacity} capacity slots open, "
             f"and closest to the affected route.\n"
-            f"- Route check confirms {crew_id} can reach the delivery zone "
-            f"via Las Vegas Blvd with a short ETA.\n"
+            f"- Route ETAs from {crew_id} to delivery locations:\n{eta_comparison}\n"
+            f"- All ETAs are within deadline windows — reroute is feasible.\n"
             f"- Other AI-Crews either have cooler issues or lack capacity "
             f"for {len(inp.affected_order_ids)} additional orders.\n\n"
             f"RECOMMENDATION: Immediately reroute all {len(inp.affected_order_ids)} "

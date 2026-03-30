@@ -150,6 +150,7 @@ class NavigateInput:
     target_lng: float
     leg: str  # LegType value — "pickup" or "delivery"
     steps: int = 8
+    waypoints: list[dict] | None = None  # [{"lat": float, "lng": float}, ...]
 
 
 @dataclass

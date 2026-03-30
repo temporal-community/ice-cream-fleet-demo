@@ -26,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
         deliver_order,
         execute_customer_change,
         execute_recovery,
+        get_route_polyline,
         navigate_to,
         pickup_orders,
         publish_agent_event,
@@ -122,6 +123,7 @@ class CrewRouteWorkflow:
         order_ids = [o.order_id for o in orders]
 
         # Step 1: Navigate to kitchen (pickup point)
+        # Crews start at the warehouse so this is a short move — no polyline needed
         # schedule_to_close_timeout = overall deadline for all retries
         # start_to_close_timeout = per-attempt timeout
         # NAV_RETRY has no max_attempts — retries until schedule deadline
@@ -156,9 +158,12 @@ class CrewRouteWorkflow:
         # Step 3: Deliver each order
         all_orders = list(orders)
         delivered = []
+        # Track last known position for polyline origin
+        current_lat, current_lng = WAREHOUSE.lat, WAREHOUSE.lng
 
         while all_orders:
             if self._return_to_base:
+                # Emergency return — use straight-line (no polyline fetch)
                 await workflow.execute_activity(
                     navigate_to,
                     NavigateInput(
@@ -181,6 +186,18 @@ class CrewRouteWorkflow:
 
             order = all_orders.pop(0)
 
+            # Fetch road-following waypoints for delivery route
+            delivery_waypoints = await workflow.execute_activity(
+                get_route_polyline,
+                args=[
+                    current_lat, current_lng,
+                    order.delivery_lat, order.delivery_lng,
+                ],
+                schedule_to_close_timeout=timedelta(minutes=5),
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=FAST_RETRY,
+            )
+
             # Navigate to hotel
             await workflow.execute_activity(
                 navigate_to,
@@ -191,12 +208,15 @@ class CrewRouteWorkflow:
                     target_lng=order.delivery_lng,
                     leg="delivery",
                     steps=10,
+                    waypoints=delivery_waypoints,
                 ),
                 schedule_to_close_timeout=timedelta(minutes=10),
                 start_to_close_timeout=timedelta(seconds=120),
                 heartbeat_timeout=timedelta(seconds=15),
                 retry_policy=NAV_RETRY,
             )
+            # Update tracked position after arrival
+            current_lat, current_lng = order.delivery_lat, order.delivery_lng
 
             # Deliver
             await workflow.execute_activity(
