@@ -6,9 +6,9 @@ Ice cream commissary kitchen + hotel delivery destinations.
 
 from agent_fleet.models import Coords
 
-# Commissary kitchen — east of the strip near Convention Center
-WAREHOUSE = Coords(lat=36.1280, lng=-115.1520)
-WAREHOUSE_LABEL = "Ice Cream Kitchen"
+# Milk Bar at The Cosmopolitan — 3708 Las Vegas Blvd S
+WAREHOUSE = Coords(lat=36.1094, lng=-115.1735)
+WAREHOUSE_LABEL = "Milk Bar"
 
 # Hotel delivery destinations on the Las Vegas Strip (3 hotels for clean demo)
 DELIVERY_DESTINATIONS = {

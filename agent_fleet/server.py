@@ -19,6 +19,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from temporalio.client import Client
 from temporalio.service import RPCError
@@ -581,6 +582,9 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 @app.get("/")
 async def index():
     return FileResponse(FRONTEND_DIR / "index.html")
+
+
+app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="frontend-static")
 
 
 if __name__ == "__main__":
