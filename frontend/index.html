@@ -247,6 +247,10 @@
     overflow-y: auto;
     border-bottom: 1px solid #2a2d3a;
   }
+  #order-cards {
+    max-height: 210px;
+    overflow-y: auto;
+  }
 
   /* Event log — pinned at bottom */
   .event-log-section {
@@ -354,7 +358,8 @@
   }
   .agent-box.active .agent-box-body {
     padding: 8px 12px;
-    max-height: 500px;
+    max-height: 160px;
+    overflow-y: auto;
   }
   .agent-box-entry {
     font-size: 11px;
@@ -561,6 +566,11 @@
       0 0 0 1px #cc0000,
       0 0 6px #ff000066,
       0 0 12px #ff000033;
+    animation: sign-glow 2s ease-in-out infinite alternate;
+  }
+  @keyframes sign-glow {
+    0% { box-shadow: 0 0 0 1px #cc000066, 0 0 3px #ff000022; outline-color: #ff2a2a66; }
+    100% { box-shadow: 0 0 0 1px #cc0000, 0 0 10px #ff000099, 0 0 20px #ff000055; outline-color: #ff2a2a; }
   }
   .vegas-diamond::before {
     content: '';
@@ -595,6 +605,7 @@
     text-transform: uppercase;
     line-height: 1.2;
     white-space: nowrap;
+    animation: text-glow 2s ease-in-out infinite alternate;
   }
   .vegas-sub {
     font-family: -apple-system, sans-serif;
@@ -604,6 +615,11 @@
     letter-spacing: 0.8px;
     margin-top: 1px;
     opacity: 0.7;
+    animation: text-glow 2s ease-in-out infinite alternate;
+  }
+  @keyframes text-glow {
+    0% { text-shadow: none; color: #cc000088; }
+    100% { text-shadow: 0 0 6px #ff000088; color: #cc0000; }
   }
   .vegas-pole {
     width: 3px;
@@ -612,12 +628,15 @@
     border-radius: 1px;
   }
 
-  /* --- Retro 50s ice cream shop sign --- */
+  /* --- Neon ice cream shop sign --- */
   .retro-sign {
     display: flex;
     flex-direction: column;
     align-items: center;
     filter: drop-shadow(0 3px 10px rgba(0,0,0,0.5));
+  }
+  .retro-neon-wrap {
+    filter: drop-shadow(0 0 6px #ff69b4) drop-shadow(0 0 12px #ff69b444);
   }
   .retro-arrow {
     font-size: 10px;
@@ -631,54 +650,131 @@
     50% { opacity: 0.3; }
   }
   .retro-body {
-    background: linear-gradient(180deg, #ffe4f0 0%, #fff 30%, #fff 70%, #ffe4f0 100%);
-    border: 3px solid #ff69b4;
-    border-radius: 20px;
-    padding: 5px 14px 4px;
+    background: linear-gradient(180deg, #1a0a12 0%, #2d0f1e 50%, #1a0a12 100%);
+    border: 2px solid #ff69b4;
+    border-radius: 50%;
+    padding: 10px 16px 8px;
     text-align: center;
     position: relative;
+    min-width: 80px;
     box-shadow:
-      0 0 8px #ff69b488,
-      0 0 16px #ff69b433,
-      inset 0 1px 0 rgba(255,255,255,0.8);
+      0 0 10px #ff69b4aa,
+      0 0 25px #ff69b466,
+      0 0 40px #ff69b422,
+      inset 0 0 15px #ff69b422;
   }
   .retro-body::before {
     content: '';
     position: absolute;
-    inset: -6px;
-    border: 2px dotted #ff69b4;
-    border-radius: 24px;
-    opacity: 0.5;
-    animation: retro-dots 2s linear infinite;
+    inset: -7px;
+    border: 2px solid #ff69b4;
+    border-radius: 50%;
+    opacity: 0.4;
+    animation: retro-pulse 2s ease-in-out infinite;
   }
-  @keyframes retro-dots {
-    0% { opacity: 0.3; }
-    50% { opacity: 0.8; }
-    100% { opacity: 0.3; }
+  .retro-body::after {
+    content: '';
+    position: absolute;
+    inset: -13px;
+    border: 1px solid #ff69b466;
+    border-radius: 50%;
+    opacity: 0.2;
+    animation: retro-pulse 2s ease-in-out infinite reverse;
+  }
+  @keyframes retro-pulse {
+    0%, 100% { opacity: 0.2; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(1.02); }
+  }
+  .retro-icon {
+    font-size: 16px;
+    line-height: 1;
+    margin-bottom: 1px;
+    animation: retro-blink 1.5s steps(2) infinite;
   }
   .retro-name {
     font-family: 'Monoton', cursive;
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 400;
-    color: #d6336c;
+    color: #ff69b4;
     letter-spacing: 1px;
     text-transform: uppercase;
     line-height: 1.1;
     white-space: nowrap;
+    text-shadow: 0 0 8px #ff69b4, 0 0 16px #ff69b488;
   }
   .retro-sub {
     font-family: -apple-system, sans-serif;
-    font-size: 8px;
-    color: #e64980;
+    font-size: 7px;
+    color: #ff8ec4;
     font-style: italic;
     letter-spacing: 0.5px;
-    margin-top: 1px;
+    margin-top: 2px;
+    text-shadow: 0 0 4px #ff69b466;
   }
   .retro-pole {
     width: 4px;
     height: 12px;
     background: linear-gradient(to right, #ccc, #fff, #ccc);
     border-radius: 2px;
+  }
+
+  /* --- Light-map adaptive sign colors --- */
+  .light-map .vegas-diamond {
+    background: #5a0a1a;
+    outline: 2px solid #c8a84e;
+    outline-offset: 2px;
+    box-shadow:
+      0 0 0 1px #c8a84e,
+      0 3px 12px rgba(0,0,0,0.5),
+      0 6px 20px rgba(0,0,0,0.3);
+  }
+  .light-map .vegas-name {
+    color: #ffe14d;
+    text-shadow: 0 0 4px #ffe14d66;
+  }
+  .light-map .vegas-sub {
+    color: #f0d080;
+  }
+  .light-map .vegas-diamond::before {
+    background: radial-gradient(circle 2px at 0px 50%, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 100% 50%, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 50% 0px, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 50% 100%, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 15% 0px, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 85% 0px, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 15% 100%, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 85% 100%, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 0px 25%, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 0px 75%, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 100% 25%, #fff 50%, transparent 51%),
+                radial-gradient(circle 2px at 100% 75%, #fff 50%, transparent 51%);
+  }
+  .light-map .vegas-star {
+    text-shadow: 0 0 8px #c8a84e, 0 0 16px #c8a84e88;
+  }
+  .light-map .retro-body {
+    background: linear-gradient(180deg, #3a0020 0%, #1a000e 50%, #3a0020 100%);
+    border: 2px solid #ff69b4;
+    box-shadow:
+      0 0 12px #ff69b4cc,
+      0 0 30px #ff69b488,
+      0 0 50px #ff69b444,
+      0 4px 16px rgba(0,0,0,0.6),
+      inset 0 0 20px #ff69b433;
+  }
+  .light-map .retro-body::before {
+    border: 2px solid #ff69b4;
+    opacity: 0.6;
+  }
+  .light-map .retro-name {
+    color: #ffb6d9;
+    text-shadow: 0 0 8px #ff69b4, 0 0 20px #ff69b488;
+  }
+  .light-map .retro-sub {
+    color: #ff8ec4;
+  }
+  .light-map .retro-neon-wrap {
+    filter: drop-shadow(0 0 10px #ff69b4) drop-shadow(0 0 20px #ff69b466);
   }
 
   /* --- Map style picker --- */
@@ -734,7 +830,7 @@
 
   /* --- Event log --- */
   .event-log {
-    max-height: 150px;
+    max-height: 200px;
     overflow-y: auto;
     font-family: 'SF Mono', 'Fira Code', monospace;
     font-size: 10px;
@@ -1114,6 +1210,12 @@ const map = L.map('map', {
 
 // Tile options — switch between styles
 const tileLayers = {
+  'Google Maps': L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+    maxZoom: 20,
+  }),
+  'Google Satellite': L.tileLayer('https://mt1.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}', {
+    maxZoom: 20,
+  }),
   'Dark Matter': L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     maxZoom: 19,
     subdomains: 'abcd',
@@ -1125,18 +1227,10 @@ const tileLayers = {
   'Watercolor': L.tileLayer('https://tiles.stadiamaps.com/tiles/stamen_watercolor/{z}/{x}/{y}.jpg', {
     maxZoom: 16,
   }),
-  'Standard': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-  }),
-  'OSM Bright': L.tileLayer('https://tiles.stadiamaps.com/tiles/osm_bright/{z}/{x}/{y}{r}.png', {
-    maxZoom: 20,
-  }),
-  'Satellite': L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}{r}.jpg', {
-    maxZoom: 19,
-  }),
 };
-// Default to Dark Matter — swap here to try others
-tileLayers['Dark Matter'].addTo(map);
+// Default to Google Maps
+tileLayers['Google Maps'].addTo(map);
+document.getElementById('map').classList.add('light-map');
 
 // Custom map style picker (replaces default Leaflet control)
 const styleControl = L.control({ position: 'bottomright' });
@@ -1151,7 +1245,7 @@ styleControl.onAdd = function() {
       <span>Map Style</span>
     </div>
     <div class="style-picker-menu">
-      ${Object.keys(tileLayers).map(name => `<div class="style-option${name === 'Dark Matter' ? ' active' : ''}" data-style="${name}">${name}</div>`).join('')}
+      ${Object.keys(tileLayers).map(name => `<div class="style-option${name === 'Google Maps' ? ' active' : ''}" data-style="${name}">${name}</div>`).join('')}
     </div>
   `;
   const toggle = container.querySelector('.style-picker-toggle');
@@ -1169,6 +1263,9 @@ styleControl.onAdd = function() {
       container.querySelectorAll('.style-option').forEach(o => o.classList.remove('active'));
       opt.classList.add('active');
       menu.classList.remove('open');
+      // Adaptive sign colors: dark maps keep defaults, light maps get high-contrast styling
+      const isLight = (name !== 'Dark Matter');
+      document.getElementById('map').classList.toggle('light-map', isLight);
     });
   });
   L.DomEvent.disableClickPropagation(container);
@@ -1189,8 +1286,8 @@ function getBearing(prev, curr) {
 }
 
 function crewIcon(color, hasAlert, bearing) {
-  // Flip truck emoji when heading left (west-ish: 180-360 degrees)
-  const flip = typeof bearing === 'number' && bearing > 135 && bearing < 315;
+  // 🚚 emoji faces left by default. Flip when heading east (0-180) so truck faces forward.
+  const flip = typeof bearing === 'number' && bearing <= 180;
   const alertDot = hasAlert
     ? `<div style="position:absolute;top:-4px;right:-4px;width:12px;height:12px;background:#ef4444;border-radius:50%;border:2px solid #fff;animation:pulse 1s infinite;z-index:10;"></div>`
     : '';
@@ -1233,10 +1330,12 @@ function vegasSign(name, sub) {
 
 function retroSign(name) {
   return `<div class="retro-sign">
-    <div class="retro-arrow">▼ ▼ ▼</div>
-    <div class="retro-body">
-      <div class="retro-name">🍦 ${name} 🍦</div>
-      <div class="retro-sub">Ice Cream &amp; Treats</div>
+    <div class="retro-neon-wrap">
+      <div class="retro-body">
+        <div class="retro-icon">🍦</div>
+        <div class="retro-name">${name}</div>
+        <div class="retro-sub">Ice Cream &amp; Treats</div>
+      </div>
     </div>
     <div class="retro-pole"></div>
   </div>`;
@@ -1317,7 +1416,10 @@ function updateCrews(crews) {
       crewMarkers[c.crew_id].setIcon(crewIcon(color, hasAlert, bearing));
     }
 
-    if (c.path_history && c.path_history.length > 0) {
+    if (c.status === 'idle') {
+      // Clear trail after delivery completes
+      crewTrails[c.crew_id].setLatLngs([]);
+    } else if (c.path_history && c.path_history.length > 0) {
       crewTrails[c.crew_id].setLatLngs(c.path_history.map(p => [p.lat, p.lng]));
       crewTrails[c.crew_id].setStyle({ color });
     }

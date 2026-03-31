@@ -669,36 +669,42 @@ async def reason_about_assignment(
 
     if offline_agents:
         offline_list = " and ".join(offline_agents)
-        resolver_context = (
-            f"DEGRADED MODE: {offline_list} offline.\n  Compensating with available data — "
-        )
         if fleet_agent_offline and customer_agent_offline:
-            resolver_context += (
-                "using last known crew positions and order metadata only.\n"
-                "  Assigning nearest available crew as best-effort.\n"
+            resolver_context = (
+                f"DEGRADED: {offline_list} offline.\n"
+                f"  Falling back to last-known crew positions + order metadata.\n"
+                f"  Picking nearest crew with capacity as best-effort."
             )
         elif fleet_agent_offline:
-            resolver_context += (
-                "using last known crew positions. Customer priority assessment available.\n"
+            resolver_context = (
+                "DEGRADED: Fleet Agent offline — no live fleet scan.\n"
+                "  Using last-known positions to pick nearest crew.\n"
+                "  Customer priority assessment still available."
             )
         else:
-            resolver_context += (
-                "fleet positions confirmed. "
-                "Using order metadata for priority (no customer assessment).\n"
+            resolver_context = (
+                "DEGRADED: Customer Agent offline — no priority assessment.\n"
+                "  Fleet positions confirmed. Using order metadata for priority."
             )
         resolver_summary = f"{inp.order_id} -> {best_crew} (degraded — {offline_list} offline)"
     else:
         resolver_context = ""
         resolver_summary = f"{inp.order_id} assigned to {best_crew}"
 
-    await fleet.publish_agent_event(
-        "resolver",
-        "plan",
-        f"{'  ' + resolver_context if resolver_context else ''}"
+    resolver_body = ""
+    if resolver_context:
+        resolver_body += resolver_context + "\n"
+    resolver_body += (
         f"ASSIGNMENT: {inp.order_id} -> {best_crew}\n"
         f"  {inp.hotel} {inp.event} ({inp.servings} servings)\n"
         f"  {best_crew} dispatching — ETA ~{best_eta}min, "
-        f"deadline {inp.deadline_minutes}min.",
+        f"deadline {inp.deadline_minutes}min."
+    )
+
+    await fleet.publish_agent_event(
+        "resolver",
+        "plan",
+        resolver_body,
         summary=resolver_summary,
     )
 
