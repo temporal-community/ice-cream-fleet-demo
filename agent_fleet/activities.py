@@ -18,15 +18,11 @@ import os
 import httpx
 from temporalio import activity
 
-from agent_fleet.locations import CREW_ASSIGNMENTS, DELIVERY_DESTINATIONS
+from agent_fleet.locations import VENUES_BY_HOTEL, generate_random_order
 from agent_fleet.models import (
-    AssignOrdersInput,
-    AssignOrdersOutput,
     CheckDisruptionInput,
     CheckDisruptionOutput,
     CoolerStatus,
-    CoordinateDeliveryInput,
-    CoordinateDeliveryOutput,
     CrewStatus,
     DeliverInput,
     DeliverOutput,
@@ -36,6 +32,8 @@ from agent_fleet.models import (
     ExecuteRecoveryOutput,
     FindBackupCrewInput,
     FindBackupCrewOutput,
+    GenerateOrderInput,
+    GenerateOrderOutput,
     GetFleetStatusInput,
     GetFleetStatusOutput,
     GetOrderPrioritiesInput,
@@ -48,6 +46,8 @@ from agent_fleet.models import (
     PickupOutput,
     PublishAgentEventInput,
     PublishAgentEventOutput,
+    ReasonAboutAssignmentInput,
+    ReasonAboutAssignmentOutput,
     RecoveryPlan,
     RunDisruptionResolverInput,
     RunDisruptionResolverOutput,
@@ -58,7 +58,7 @@ from agent_fleet.simulation import fleet
 
 # Known locations for mock waypoint generation (Las Vegas Strip)
 _STRIP_POINTS = {
-    "warehouse": (36.1280, -115.1520),
+    "warehouse": (36.1280, -115.1530),
     "caesars": (36.1162, -115.1745),
     "mgm": (36.1024, -115.1696),
     "mandalay": (36.0919, -115.1761),
@@ -69,6 +69,22 @@ _STRIP_POINTS = {
 # The strip runs SSE from Venetian, bends at Flamingo, then curves SW to Mandalay
 # Coordinates placed ON the road centerline as shown on CartoDB/Stadia tiles
 _STRIP_CORRIDOR = [
+    # --- Paradise Rd to the Strip (new shop location east of the Strip) ---
+    # Frosty's Ice Cream on Paradise Rd near Convention Center
+    (36.12800, -115.15300),
+    # Head west on Convention Center Dr / Desert Inn Rd toward the Strip
+    (36.12800, -115.15500),
+    (36.12800, -115.15700),
+    (36.12800, -115.15900),
+    (36.12800, -115.16100),
+    (36.12800, -115.16300),
+    (36.12800, -115.16500),
+    (36.12800, -115.16700),
+    (36.12800, -115.16900),
+    # Reach Las Vegas Blvd and turn south
+    (36.12700, -115.17050),
+    (36.12500, -115.17080),
+    (36.12350, -115.17090),
     # Venetian / Palazzo — LV Blvd here is at ~-115.1710
     (36.12200, -115.17100),
     (36.12150, -115.17105),
@@ -97,12 +113,12 @@ _STRIP_CORRIDOR = [
     (36.11300, -115.17380),
     (36.11250, -115.17370),
     (36.11200, -115.17360),
-    # Cosmopolitan — Milk Bar (marker: 36.1094, -115.1735)
+    # Cosmopolitan
     (36.11150, -115.17355),
     (36.11100, -115.17350),
     (36.11050, -115.17350),
     (36.11000, -115.17350),
-    (36.10940, -115.17350),  # Milk Bar
+    (36.10940, -115.17350),
     # CityCenter / Aria — road bends slightly east
     (36.10880, -115.17340),
     (36.10830, -115.17330),
@@ -251,6 +267,7 @@ async def get_route_polyline(
     api_key = os.environ.get("GOOGLE_MAPS_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 
     if not api_key:
+        activity.logger.info("[NAV] No Maps API key — using mock corridor")
         return _mock_route_waypoints(origin_lat, origin_lng, dest_lat, dest_lng)
 
     origin = f"{origin_lat},{origin_lng}"
@@ -278,6 +295,7 @@ async def get_route_polyline(
         # Decode the overview polyline
         encoded = data["routes"][0]["overview_polyline"]["points"]
         decoded = decode_polyline(encoded)
+        activity.logger.info(f"[NAV] Using Google Maps polyline ({len(decoded)} points)")
         return [{"lat": lat, "lng": lng} for lat, lng in decoded]
 
     except Exception as e:
@@ -477,25 +495,17 @@ def _mock_hotel_context(hotel_name: str) -> str:
             f"- {hotel_name}: Currently hosting Wet Republic pool party series. "
             f"High guest volume with VIP catering expectations.\n"
             f"- {hotel_name}: Grand Garden Arena has a major event tonight — "
-            f"hotel is at peak occupancy with elevated service standards.\n"
-            f"- {hotel_name}: Known for premium poolside dining — late catering "
-            f"deliveries have resulted in vendor penalties in the past."
+            f"hotel is at peak occupancy with elevated service standards."
         ),
         "Caesars Palace": (
             f"- {hotel_name}: Banquet halls booked for a corporate gala tonight. "
             f"Caesars is known for premium event standards.\n"
-            f"- {hotel_name}: The Forum Shops are running a VIP shopping event — "
-            f"hotel staff are stretched thin, on-time delivery is critical.\n"
-            f"- {hotel_name}: Colosseum show tonight means 4,000+ guests on property. "
-            f"Late delivery would damage vendor relationship."
+            f"- {hotel_name}: Colosseum show tonight means 4,000+ guests on property."
         ),
         "Mandalay Bay": (
             f"- {hotel_name}: Tech conference in session at the Convention Center. "
             f"Conference catering is time-sensitive — dessert course is scheduled.\n"
-            f"- {hotel_name}: Shark Reef and pool areas at capacity — resort is in "
-            f"peak weekend mode with premium service expectations.\n"
-            f"- {hotel_name}: Convention Center hosts 10,000+ attendees — "
-            f"catering delays would be visible to a large audience."
+            f"- {hotel_name}: VIP-only venue — all orders treated as highest priority."
         ),
     }
     # Fuzzy match hotel name
@@ -508,122 +518,223 @@ def _mock_hotel_context(hotel_name: str) -> str:
 # --- Core delivery activities ---
 
 
-@activity.defn(name="assign_orders")
-async def assign_orders(inp: AssignOrdersInput) -> AssignOrdersOutput:
-    """Assign orders to AI-Crews using deterministic mapping."""
-    for crew_id, order_ids in CREW_ASSIGNMENTS.items():
-        await fleet.assign_orders_to_crew(crew_id, order_ids)
-        activity.logger.info(f"Assigned {order_ids} to {crew_id}")
-    return AssignOrdersOutput(assignments=dict(CREW_ASSIGNMENTS))
+@activity.defn(name="generate_order")
+async def generate_order(inp: GenerateOrderInput) -> GenerateOrderOutput:
+    """Generate a random order from the venue pool and register it in fleet state."""
+    order_data = generate_random_order(inp.order_number)
+
+    await fleet.register_order(
+        order_id=order_data["order_id"],
+        hotel=order_data["hotel"],
+        label=order_data["label"],
+        priority=order_data["priority"],
+        servings=order_data["servings"],
+        delivery_coords=order_data["coords"],
+        deadline_minutes=order_data["deadline_minutes"],
+    )
+
+    activity.logger.info(f"Generated {order_data['order_id']}: {order_data['label']}")
+    return GenerateOrderOutput(
+        order_id=order_data["order_id"],
+        hotel=order_data["hotel"],
+        label=order_data["label"],
+        priority=order_data["priority"],
+        servings=order_data["servings"],
+        delivery_lat=order_data["coords"].lat,
+        delivery_lng=order_data["coords"].lng,
+        deadline_minutes=order_data["deadline_minutes"],
+        event=order_data["event"],
+    )
 
 
-@activity.defn(name="coordinate_delivery_plan")
-async def coordinate_delivery_plan(inp: CoordinateDeliveryInput) -> CoordinateDeliveryOutput:
+@activity.defn(name="reason_about_assignment")
+async def reason_about_assignment(
+    inp: ReasonAboutAssignmentInput,
+) -> ReasonAboutAssignmentOutput:
     """
-    Multi-agent coordination for initial delivery planning.
+    Multi-agent reasoning to decide which crew should handle a new order.
 
-    Fleet Agent assesses routes and capacity, Customer Agent evaluates
-    priorities and deadlines, Resolver synthesizes the final dispatch plan.
+    Fleet Agent assesses crew positions and capacity.
+    Customer Agent evaluates order priority and urgency.
+    Resolver synthesizes and picks the best crew.
     """
-    await fleet.get_fleet_summary()
-    await fleet.get_order_priorities_summary()
+    # --- Fleet Agent: find best crew ---
+    fleet_agent_offline = await fleet.is_agent_disconnected("fleet_agent")
 
-    # --- Fleet Agent: route and capacity analysis ---
-    await fleet.publish_agent_event(
-        "fleet_agent",
-        "tool_call",
-        "Calling tool_get_fleet_status to assess AI-Crew positions, "
-        "cooler conditions, and route capacity...",
-        summary="Checking fleet status...",
-    )
-    await asyncio.sleep(0.5)
-
-    route_lines = []
-    for crew_id, order_ids in inp.assignments.items():
-        for oid in order_ids:
-            dest = DELIVERY_DESTINATIONS.get(oid, {})
-            hotel = dest.get("hotel", oid)
-            route_lines.append(f"  {crew_id} -> {hotel}")
-    routes_text = "\n".join(route_lines)
-
-    await fleet.publish_agent_event(
-        "fleet_agent",
-        "assessment",
-        f"FLEET ASSESSMENT — 3 AI-Crews ready at Ice Cream Kitchen, "
-        f"all coolers nominal at 0F.\n\n"
-        f"Proposed routes:\n{routes_text}\n\n"
-        f"All AI-Crews have capacity for their assigned orders. "
-        f"Routes are non-overlapping — each AI-Crew takes a direct path "
-        f"from the kitchen to their hotel. No conflicts detected.\n\n"
-        f"RECOMMENDATION: Clear to dispatch. Monitoring cooler temps "
-        f"and ETAs throughout delivery.",
-        summary="All AI-Crews ready, routes clear — recommending dispatch",
-    )
-    await asyncio.sleep(0.4)
-
-    # --- Customer Agent: priority and deadline analysis ---
-    await fleet.publish_agent_event(
-        "customer_agent",
-        "tool_call",
-        "Calling tool_get_order_priorities to review VIP status, "
-        "servings, and delivery deadlines...",
-        summary="Checking order priorities...",
-    )
-    await asyncio.sleep(0.5)
-
-    order_lines = []
-    total_servings = 0
-    for oid in DELIVERY_DESTINATIONS:
-        dest = DELIVERY_DESTINATIONS[oid]
-        total_servings += dest["servings"]
-        urgency = "TIGHT" if dest["deadline_minutes"] <= 30 else "comfortable"
-        order_lines.append(
-            f"  {oid} -> {dest['hotel']}: {dest['priority'].upper()}, "
-            f"{dest['servings']} servings, {dest['deadline_minutes']}min deadline [{urgency}]"
+    # Find the best crew: closest with capacity and working cooler
+    best_crew = None
+    best_dist = float("inf")
+    fleet_lines = []
+    for cid, crew in (await _get_crews_snapshot()).items():
+        available = crew["capacity"] - len(crew["current_orders"])
+        dist = math.sqrt(
+            (crew["lat"] - inp.delivery_lat) ** 2 + (crew["lng"] - inp.delivery_lng) ** 2
         )
-    orders_text = "\n".join(order_lines)
+        dist_miles = dist * 69.0
+        eta_min = max(2, int(dist_miles * 3.5))
+        status_tag = ""
+        if crew["disconnected"]:
+            status_tag = " [DISCONNECTED]"
+        elif crew["cooler_status"] != "ok":
+            status_tag = f" [COOLER {crew['cooler_status'].upper()}]"
 
-    await fleet.publish_agent_event(
-        "customer_agent",
-        "assessment",
-        f"CUSTOMER IMPACT — {total_servings} total servings across "
-        f"{len(DELIVERY_DESTINATIONS)} VIP orders:\n\n"
-        f"{orders_text}\n\n"
-        f"All orders are VIP-tier with 30-35 minute deadlines. "
-        f"These are high-profile hotel events — pool parties, banquets, "
-        f"and conferences. On-time delivery is critical.\n\n"
-        f"RECOMMENDATION: Dispatch immediately. Caesars and Mandalay Bay "
-        f"have the tightest deadlines (30min) — prioritize if any delays occur.",
-        summary="All VIP orders with tight deadlines — dispatch immediately",
-    )
-    await asyncio.sleep(0.4)
+        fleet_lines.append(
+            f"  {cid}: {available} slots free, ~{eta_min}min ETA, "
+            f"status={crew['status']}{status_tag}"
+        )
 
-    # --- Resolver: synthesize dispatch decision ---
-    await fleet.publish_agent_event(
-        "resolver",
-        "synthesis",
-        f"Fleet Agent confirms all AI-Crews ready with nominal coolers. "
-        f"Customer Agent confirms all {len(DELIVERY_DESTINATIONS)} orders are VIP "
-        f"with tight deadlines — {total_servings} servings at stake.\n\n"
-        f"Both agents agree on immediate dispatch. No conflicts to resolve.",
-        summary="Both agents agree — dispatching immediately",
+        # Skip crews that can't take orders
+        if crew["disconnected"] or crew["cooler_status"] != "ok" or available <= 0:
+            continue
+        if dist < best_dist:
+            best_dist = dist
+            best_crew = cid
+
+    fleet_text = "\n".join(fleet_lines)
+    if best_crew is None:
+        # Fallback: pick any crew with capacity even if busy
+        best_crew = "ai-crew-1"
+
+    best_eta = max(2, int(best_dist * 69.0 * 3.5))
+
+    if fleet_agent_offline:
+        # Fleet Agent is offline — publish offline notice and skip its assessment
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "offline",
+            "Fleet Agent is OFFLINE — unable to provide fleet assessment. "
+            "Resolver will assign based on available data.",
+            summary="Fleet Agent offline",
+        )
+        await asyncio.sleep(0.2)
+    else:
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "tool_call",
+            f"New order {inp.order_id} for {inp.hotel} ({inp.event}). "
+            f"Checking fleet positions and capacity...",
+            summary=f"New order for {inp.hotel} — checking fleet...",
+        )
+        await asyncio.sleep(0.4)
+
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "assessment",
+            f"Fleet scan for {inp.order_id} ({inp.hotel}):\n{fleet_text}\n\n"
+            f"RECOMMENDATION: {best_crew} — closest with capacity, "
+            f"~{best_eta}min ETA.",
+            summary=f"{best_crew} recommended — ~{best_eta}min ETA",
+        )
+        await asyncio.sleep(0.3)
+
+    # --- Customer Agent: priority assessment ---
+    customer_agent_offline = await fleet.is_agent_disconnected("customer_agent")
+    urgency = (
+        "URGENT"
+        if inp.deadline_minutes <= 25
+        else ("TIGHT" if inp.deadline_minutes <= 35 else "comfortable")
     )
-    await asyncio.sleep(0.3)
+    venue_info = VENUES_BY_HOTEL.get(inp.hotel, {})
+    vip_tier = venue_info.get("vip_tier", "standard")
+
+    if customer_agent_offline:
+        await fleet.publish_agent_event(
+            "customer_agent",
+            "offline",
+            "Customer Agent is OFFLINE — unable to assess customer priority. "
+            "Resolver will use order metadata for prioritization.",
+            summary="Customer Agent offline",
+        )
+        await asyncio.sleep(0.2)
+    else:
+        await fleet.publish_agent_event(
+            "customer_agent",
+            "assessment",
+            f"Order {inp.order_id}: {inp.hotel} {inp.event}\n"
+            f"  Priority: {inp.priority.upper()} ({vip_tier} tier)\n"
+            f"  Servings: {inp.servings}, Deadline: "
+            f"{inp.deadline_minutes}min [{urgency}]\n\n"
+            f"{'High-profile event — on-time delivery critical.' if urgency != 'comfortable' else 'Standard priority — normal delivery timeline.'}",  # noqa: E501
+            summary=f"{inp.priority.upper()} order, {urgency} deadline",
+        )
+        await asyncio.sleep(0.3)
+
+    # --- Resolver: synthesize and assign ---
+    # Build context about what data the Resolver has to work with
+    offline_agents = []
+    if fleet_agent_offline:
+        offline_agents.append("Fleet Agent")
+    if customer_agent_offline:
+        offline_agents.append("Customer Agent")
+
+    if offline_agents:
+        offline_list = " and ".join(offline_agents)
+        resolver_context = (
+            f"DEGRADED MODE: {offline_list} offline.\n  Compensating with available data — "
+        )
+        if fleet_agent_offline and customer_agent_offline:
+            resolver_context += (
+                "using last known crew positions and order metadata only.\n"
+                "  Assigning nearest available crew as best-effort.\n"
+            )
+        elif fleet_agent_offline:
+            resolver_context += (
+                "using last known crew positions. Customer priority assessment available.\n"
+            )
+        else:
+            resolver_context += (
+                "fleet positions confirmed. "
+                "Using order metadata for priority (no customer assessment).\n"
+            )
+        resolver_summary = f"{inp.order_id} -> {best_crew} (degraded — {offline_list} offline)"
+    else:
+        resolver_context = ""
+        resolver_summary = f"{inp.order_id} assigned to {best_crew}"
 
     await fleet.publish_agent_event(
         "resolver",
         "plan",
-        f"DISPATCH PLAN CONFIRMED:\n"
-        f"{routes_text}\n\n"
-        f"All AI-Crews dispatching simultaneously from Ice Cream Kitchen. "
-        f"Fleet Agent monitoring cooler temps and ETAs. "
-        f"Customer Agent tracking deadline compliance.\n\n"
-        f"Agents standing by for disruption response if needed.",
-        summary="Dispatch plan confirmed — all AI-Crews rolling out",
+        f"{'  ' + resolver_context if resolver_context else ''}"
+        f"ASSIGNMENT: {inp.order_id} -> {best_crew}\n"
+        f"  {inp.hotel} {inp.event} ({inp.servings} servings)\n"
+        f"  {best_crew} dispatching — ETA ~{best_eta}min, "
+        f"deadline {inp.deadline_minutes}min.",
+        summary=resolver_summary,
     )
 
-    activity.logger.info("Multi-agent delivery coordination complete")
-    return CoordinateDeliveryOutput(success=True)
+    # Register assignment in fleet state
+    await fleet.assign_order_to_crew(best_crew, inp.order_id)
+
+    activity.logger.info(f"Assigned {inp.order_id} ({inp.hotel}) -> {best_crew}")
+    return ReasonAboutAssignmentOutput(
+        crew_id=best_crew,
+        reasoning_summary=f"{best_crew} selected: closest with capacity, ~{best_eta}min ETA",
+    )
+
+
+@activity.defn(name="register_assignment")
+async def register_assignment(crew_id: str, order_id: str) -> str:
+    """Register an ADK-decided assignment in fleet state (replay-safe mutation)."""
+    await fleet.assign_order_to_crew(crew_id, order_id)
+    return f"Assigned {order_id} to {crew_id}"
+
+
+async def _get_crews_snapshot() -> dict:
+    """Get a simplified crew snapshot for agent reasoning."""
+    result = {}
+    for cid in ["ai-crew-1", "ai-crew-2", "ai-crew-3"]:
+        crew = await fleet.get_crew(cid)
+        if crew:
+            result[cid] = {
+                "lat": crew.position.lat,
+                "lng": crew.position.lng,
+                "status": crew.status.value,
+                "cooler_status": crew.cooler_status.value,
+                "capacity": crew.capacity,
+                "current_orders": list(crew.current_orders),
+                "disconnected": crew.disconnected,
+            }
+    return result
 
 
 @activity.defn(name="navigate_to")
@@ -650,16 +761,15 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
 
     leg = inp.leg if isinstance(inp.leg, str) else str(inp.leg)
     status = (
-        CrewStatus.EN_ROUTE_PICKUP
-        if leg == LegType.PICKUP.value
-        else CrewStatus.EN_ROUTE_DELIVERY
+        CrewStatus.EN_ROUTE_PICKUP if leg == LegType.PICKUP.value else CrewStatus.EN_ROUTE_DELIVERY
     )
     await fleet.set_crew_status(inp.crew_id, status)
-    await fleet.update_order_status(
-        inp.order_id,
-        OrderStatus.IN_TRANSIT,
-        f"AI-Crew {inp.crew_id} navigating to {leg} point",
-    )
+    if inp.order_id in fleet.orders:
+        await fleet.update_order_status(
+            inp.order_id,
+            OrderStatus.IN_TRANSIT,
+            f"AI-Crew {inp.crew_id} navigating to {leg} point",
+        )
 
     start_lat, start_lng = await fleet.get_crew_position(inp.crew_id)
 
@@ -674,10 +784,7 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
     # Calculate cumulative distances along the path for proportional interpolation
     segment_dists = []
     for i in range(1, len(path)):
-        d = math.sqrt(
-            (path[i][0] - path[i - 1][0]) ** 2
-            + (path[i][1] - path[i - 1][1]) ** 2
-        )
+        d = math.sqrt((path[i][0] - path[i - 1][0]) ** 2 + (path[i][1] - path[i - 1][1]) ** 2)
         segment_dists.append(d)
     total_dist = sum(segment_dists) or 1e-9
 
@@ -687,9 +794,7 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
         # Check disconnect mid-navigation too
         if await fleet.is_crew_disconnected(inp.crew_id):
             activity.logger.warning(f"{inp.crew_id} disconnected at step {step}/{inp.steps}")
-            raise RuntimeError(
-                f"AI-Crew {inp.crew_id} disconnected mid-navigation at step {step}"
-            )
+            raise RuntimeError(f"AI-Crew {inp.crew_id} disconnected mid-navigation at step {step}")
 
         # Find position along the polyline path at this fraction
         fraction = step / inp.steps
@@ -822,9 +927,7 @@ async def find_backup_crew(
 async def execute_recovery(inp: ExecuteRecoveryInput) -> ExecuteRecoveryOutput:
     """Execute disruption recovery: reroute orders and return failed AI-Crew."""
     # Reroute affected orders to backup AI-Crew
-    await fleet.reroute_orders(
-        inp.return_crew_id, inp.reroute_to_crew_id, inp.reroute_order_ids
-    )
+    await fleet.reroute_orders(inp.return_crew_id, inp.reroute_to_crew_id, inp.reroute_order_ids)
 
     # Mark the failed AI-Crew as returning
     await fleet.set_crew_status(inp.return_crew_id, CrewStatus.RETURNING)
@@ -855,9 +958,7 @@ async def execute_customer_change(
         await fleet.cancel_order(inp.order_id)
         activity.logger.info(f"Order {inp.order_id} cancelled")
     elif (
-        inp.change_type == "address_change"
-        and inp.new_lat is not None
-        and inp.new_lng is not None
+        inp.change_type == "address_change" and inp.new_lat is not None and inp.new_lng is not None
     ):
         await fleet.update_order_delivery(inp.order_id, inp.new_lat, inp.new_lng)
         activity.logger.info(
@@ -920,9 +1021,7 @@ async def resolve_disruption_mock(
         )
         events_published += 1
 
-        activity.logger.info(
-            f"Mock resolver: no backup available for {inp.disruption_crew_id}"
-        )
+        activity.logger.info(f"Mock resolver: no backup available for {inp.disruption_crew_id}")
         return RunDisruptionResolverOutput(
             recovery_plan=None,
             agent_events_published=events_published,
@@ -1030,8 +1129,8 @@ async def resolve_disruption_mock(
         await fleet.publish_agent_event(
             "fleet_agent",
             "offline",
-            f"Fleet Agent is OFFLINE — unable to provide operational assessment. "
-            f"Other agents will compensate.",
+            "Fleet Agent is OFFLINE — unable to provide operational assessment. "
+            "Other agents will compensate.",
             summary="Fleet Agent offline",
         )
         events_published += 1
@@ -1059,8 +1158,7 @@ async def resolve_disruption_mock(
             await fleet.publish_agent_event(
                 "customer_agent",
                 "tool_call",
-                f"Hotel Researcher (search) gathered live context:\n\n"
-                f"{hotel_context}",
+                f"Hotel Researcher (search) gathered live context:\n\n{hotel_context}",
                 summary="Hotel research complete — live event context gathered",
             )
             events_published += 1
@@ -1112,8 +1210,8 @@ async def resolve_disruption_mock(
         await fleet.publish_agent_event(
             "customer_agent",
             "offline",
-            f"Customer Agent is OFFLINE — unable to assess customer impact. "
-            f"Other agents will compensate.",
+            "Customer Agent is OFFLINE — unable to assess customer impact. "
+            "Other agents will compensate.",
             summary="Customer Agent offline",
         )
         events_published += 1
