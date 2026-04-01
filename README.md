@@ -6,6 +6,13 @@
 
 A conference demo showing **Google ADK** multi-agent reasoning with **Temporal** durable execution, visualized as an ice cream delivery fleet on the Las Vegas Strip.
 
+<!-- TODO: record walkthrough video and embed here -->
+<!-- TODO: verify font sizes are legible on large conference screen before presenting -->
+
+<p align="center">
+  <img src=".github/assets/screenshot.png" alt="Meltdown demo dashboard" width="900">
+</p>
+
 Orders auto-generate on a timer from Las Vegas Strip venues. AI agents reason about each order — evaluating crew positions, capacity, and priority — then assign it to the best crew. When things go wrong — crew disconnects, agent failures, customer changes — Temporal ensures nothing is lost.
 
 ## What It Demonstrates
