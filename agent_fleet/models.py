@@ -21,12 +21,6 @@ class CrewStatus(str, enum.Enum):
     DISCONNECTED = "disconnected"
 
 
-class CoolerStatus(str, enum.Enum):
-    OK = "ok"
-    MALFUNCTION = "malfunction"
-    FAILED = "failed"
-
-
 class OrderPriority(str, enum.Enum):
     VIP = "vip"
     STANDARD = "standard"
@@ -66,8 +60,6 @@ class Crew:
     position: Coords
     battery_pct: float = 100.0
     status: CrewStatus = CrewStatus.IDLE
-    cooler_status: CoolerStatus = CoolerStatus.OK
-    cooler_temp_f: float = 0.0
     capacity: int = 3
     current_orders: list[str] = field(default_factory=list)
     path_history: list[dict[str, float]] = field(default_factory=list)
@@ -81,8 +73,6 @@ class Crew:
             "position": self.position.to_dict(),
             "battery_pct": self.battery_pct,
             "status": self.status.value,
-            "cooler_status": self.cooler_status.value,
-            "cooler_temp_f": self.cooler_temp_f,
             "capacity": self.capacity,
             "current_orders": self.current_orders,
             "path_history": self.path_history,
@@ -123,23 +113,39 @@ class Order:
 
 
 @dataclass
-class AssignOrdersInput:
-    pass
+class GenerateOrderInput:
+    order_number: int
 
 
 @dataclass
-class AssignOrdersOutput:
-    assignments: dict[str, list[str]]  # crew_id -> [order_ids]
+class GenerateOrderOutput:
+    order_id: str
+    hotel: str
+    label: str
+    priority: str
+    servings: int
+    delivery_lat: float
+    delivery_lng: float
+    deadline_minutes: int
+    event: str
 
 
 @dataclass
-class CoordinateDeliveryInput:
-    assignments: dict[str, list[str]]
+class ReasonAboutAssignmentInput:
+    order_id: str
+    hotel: str
+    delivery_lat: float
+    delivery_lng: float
+    priority: str
+    servings: int
+    deadline_minutes: int
+    event: str
 
 
 @dataclass
-class CoordinateDeliveryOutput:
-    success: bool
+class ReasonAboutAssignmentOutput:
+    crew_id: str
+    reasoning_summary: str
 
 
 @dataclass
@@ -222,36 +228,6 @@ class PublishAgentEventOutput:
     success: bool
 
 
-# --- Disruption payloads ---
-
-
-@dataclass
-class CheckDisruptionInput:
-    pass
-
-
-@dataclass
-class CheckDisruptionOutput:
-    disruption_detected: bool
-    crew_id: str | None = None
-    cooler_temp_f: float = 0.0
-    affected_order_ids: list[str] = field(default_factory=list)
-    description: str = ""
-
-
-@dataclass
-class ExecuteRecoveryInput:
-    reroute_to_crew_id: str
-    reroute_order_ids: list[str]
-    return_crew_id: str
-    notifications: list[str]
-
-
-@dataclass
-class ExecuteRecoveryOutput:
-    success: bool
-
-
 # --- Customer change payloads ---
 
 
@@ -291,17 +267,6 @@ class CrewRouteOrder:
 @dataclass
 class CrewRouteInput:
     crew_id: str
-    orders: list[CrewRouteOrder]
-
-
-# --- Demo config ---
-
-
-@dataclass
-class DemoEventConfig:
-    cooler_malfunction_at_nav_step: int | None = None
-    cooler_malfunction_crew: str = "crew-1"
-    enabled: bool = False
 
 
 # --- Agent events (for UI panel) ---
@@ -325,84 +290,6 @@ class AgentEvent:
         }
 
 
-# --- Backup crew selection payloads ---
-
-
-@dataclass
-class FindBackupCrewInput:
-    failed_crew_id: str
-    order_count: int = 1
-
-
-@dataclass
-class FindBackupCrewOutput:
-    crew_id: str | None
-    reason: str
-
-
-# --- Recovery plan (bridge between agent output and workflow action) ---
-
-
-@dataclass
-class RecoveryPlan:
-    reroute_to_crew_id: str
-    reroute_order_ids: list[str]
-    return_crew_id: str
-    notifications: list[str]
-
-    def to_execute_recovery_input(self) -> ExecuteRecoveryInput:
-        return ExecuteRecoveryInput(
-            reroute_to_crew_id=self.reroute_to_crew_id,
-            reroute_order_ids=self.reroute_order_ids,
-            return_crew_id=self.return_crew_id,
-            notifications=self.notifications,
-        )
-
-
-# --- ADK agent turn payloads ---
-
-
-@dataclass
-class ConditionUpdate:
-    description: str
-    crew_id: str | None = None
-    details: str = ""
-
-
-@dataclass
-class OperatorDecision:
-    action: str  # approve/reject
-    notes: str = ""
-
-
-@dataclass
-class RunDisruptionResolverInput:
-    disruption_crew_id: str
-    cooler_temp_f: float
-    affected_order_ids: list[str]
-    description: str
-    pending_updates: list[ConditionUpdate] = field(default_factory=list)
-    iteration: int = 1
-
-
-@dataclass
-class RunDisruptionResolverOutput:
-    recovery_plan: RecoveryPlan | None
-    agent_events_published: int = 0
-    error: str | None = None
-
-
-# --- Disruption signal payload ---
-
-
-@dataclass
-class DisruptionSignalInput:
-    crew_id: str
-    cooler_temp_f: float
-    affected_order_ids: list[str]
-    description: str
-
-
 # --- Workflow inputs ---
 
 
@@ -419,3 +306,4 @@ class AgentDisconnectInput:
 @dataclass
 class MeltdownDemoInput:
     escalation_enabled: bool = False
+    max_orders: int = 20

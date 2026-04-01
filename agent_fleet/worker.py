@@ -2,6 +2,11 @@
 Temporal worker entry point for the Meltdown demo.
 
 Runs in the same process as the FastAPI server (started from server.py).
+Three workers on three task queues:
+  - meltdown-orchestration: workflows + order generation
+  - meltdown-delivery: navigation, pickup, delivery, customer changes
+  - meltdown-agents: LLM/ADK tool calls (rate-limited, max 5 concurrent)
+
 Can also be run standalone:
     python -m agent_fleet.worker
 """
@@ -24,11 +29,8 @@ except ImportError:
     _ADK_AVAILABLE = False
 
 from agent_fleet.activities import (
-    check_for_disruption,
     deliver_order,
     execute_customer_change,
-    execute_recovery,
-    find_backup_crew,
     generate_order,
     get_fleet_status,
     get_order_priorities,
@@ -38,16 +40,16 @@ from agent_fleet.activities import (
     publish_agent_event,
     reason_about_assignment,
     register_assignment,
-    resolve_disruption_mock,
     tool_get_fleet_status,
     tool_get_order_priorities,
     tool_get_route_info,
     tool_publish_agent_event,
     tool_search_hotel_context,
 )
+from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE, ORCHESTRATION_QUEUE
 from agent_fleet.workflows import CrewRouteWorkflow, MeltdownDemoWorkflow
 
-TASK_QUEUE = "meltdown-fleet"
+TASK_QUEUE = ORCHESTRATION_QUEUE  # kept for server.py backwards compat
 TEMPORAL_ADDRESS = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
 MOCK_MODE = not os.environ.get("GOOGLE_API_KEY") or not _ADK_AVAILABLE
 
@@ -55,54 +57,76 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def create_worker(client: Client) -> Worker:
-    """Create a Temporal worker with all workflows and activities registered."""
-    if MOCK_MODE:
-        logger.info("MOCK MODE: running without Google ADK")
+def create_orchestration_worker(client: Client) -> Worker:
+    """Workflows + fast coordination activities."""
+    return Worker(
+        client,
+        task_queue=ORCHESTRATION_QUEUE,
+        workflows=[MeltdownDemoWorkflow, CrewRouteWorkflow],
+        activities=[generate_order],
+        max_concurrent_activities=50,
+    )
 
-    kwargs = dict(
-        task_queue=TASK_QUEUE,
-        workflows=[
-            MeltdownDemoWorkflow,
-            CrewRouteWorkflow,
-        ],
+
+def create_delivery_worker(client: Client) -> Worker:
+    """Navigation, pickup, delivery, and customer change activities."""
+    return Worker(
+        client,
+        task_queue=DELIVERY_QUEUE,
         activities=[
-            generate_order,
-            reason_about_assignment,
             navigate_to,
             pickup_orders,
             deliver_order,
+            execute_customer_change,
+            get_route_polyline,
             get_fleet_status,
             get_order_priorities,
             publish_agent_event,
-            check_for_disruption,
-            execute_recovery,
-            execute_customer_change,
-            find_backup_crew,
-            get_route_polyline,
-            register_assignment,
-            resolve_disruption_mock,
-            tool_get_fleet_status,
-            tool_get_order_priorities,
-            tool_get_route_info,
-            tool_publish_agent_event,
-            tool_search_hotel_context,
         ],
+        max_concurrent_activities=20,
     )
 
+
+def create_agents_worker(client: Client) -> Worker:
+    """ADK/LLM activities — rate-limited, plugin only registered here."""
+    kwargs = dict(
+        task_queue=AGENTS_QUEUE,
+        activities=[
+            reason_about_assignment,
+            register_assignment,
+            tool_get_fleet_status,
+            tool_get_order_priorities,
+            tool_publish_agent_event,
+            tool_get_route_info,
+            tool_search_hotel_context,
+        ],
+        max_concurrent_activities=5,
+    )
     if not MOCK_MODE and GoogleAdkPlugin is not None:
         kwargs["plugins"] = [GoogleAdkPlugin()]
-
     return Worker(client, **kwargs)
 
 
+async def create_worker(client: Client) -> list[Worker]:
+    """Create all three workers. Returns list for server.py to manage."""
+    if MOCK_MODE:
+        logger.info("MOCK MODE: running without Google ADK")
+    return [
+        create_orchestration_worker(client),
+        create_delivery_worker(client),
+        create_agents_worker(client),
+    ]
+
+
 async def run_worker() -> None:
-    """Connect to Temporal and run the worker until interrupted."""
+    """Connect to Temporal and run all three workers until interrupted."""
     logger.info(f"Connecting to Temporal at {TEMPORAL_ADDRESS}...")
     client = await Client.connect(TEMPORAL_ADDRESS)
-    worker = await create_worker(client)
-    logger.info(f"Worker started on task queue '{TASK_QUEUE}'")
-    await worker.run()
+    workers = await create_worker(client)
+    logger.info(
+        f"Workers started on queues: {ORCHESTRATION_QUEUE}, {DELIVERY_QUEUE}, {AGENTS_QUEUE}"
+    )
+    await asyncio.gather(*[w.run() for w in workers])
 
 
 if __name__ == "__main__":

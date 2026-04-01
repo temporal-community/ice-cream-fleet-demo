@@ -13,11 +13,12 @@ This guide is for anyone presenting the Meltdown demo. It covers setup, the one-
 - Temporal UI open at http://localhost:8233 (optional but great for showing workflow history)
 
 **Pre-flight check:**
-- Crews, orders, and map visible on the dashboard
-- "Start Deliveries" button is active (not grayed out)
+- Map shows 3 hotels (MGM Grand, Caesars, Mandalay Bay) and Frosty's Ice Cream shop
+- All 3 crews are at the ice cream shop, status idle
+- "Start Deliveries" button is active
 - If you see a stale state from a prior run, click **Reset** first
 
-**Tip:** Do a dry run of each scenario before presenting. The cooler malfunction timing and crash recovery both have visual overlays that land better when you know exactly what to expect.
+**Tip:** Do a dry run of each scenario before presenting to get familiar with the agent reasoning panel timing.
 
 ---
 
@@ -33,7 +34,7 @@ Use this framing at the start of the talk before any demo:
 
 **The 30-second version:**
 
-> "Google ADK is an open-source framework for building multi-agent AI systems. You compose agents — each with their own tools and model — into pipelines: run them sequentially, in parallel, or nested. In this demo, a Fleet Agent uses Google Maps to assess logistics, a Customer Agent uses live hotel search to understand order priorities, and a Resolver Agent synthesizes their output into an actionable recovery plan."
+> "Google ADK is an open-source framework for building multi-agent AI systems. You compose agents — each with their own tools and model — into pipelines: run them sequentially, in parallel, or nested. In this demo, a Fleet Agent assesses crew positions and capacity, a Customer Agent evaluates order priority and hotel context, and a Resolver Agent synthesizes their output into assignments and recovery plans."
 
 **Key points to land:**
 - Agents are composable — `SequentialAgent`, `ParallelAgent`, nested agents
@@ -64,37 +65,144 @@ This is the "aha" moment. Return to it whenever you trigger a crash.
 
 ---
 
+## Deeper Background (for technical questions)
+
+This section is for the presenter — not for reading aloud. It gives you the architectural grounding to answer "how does that actually work?" questions confidently.
+
+### How Temporal replay works
+
+Temporal records every activity result in an append-only event log on the Temporal server. When the worker crashes and restarts, it re-executes your workflow function from the top — but when it hits an `execute_activity()` call that already completed, Temporal intercepts it and returns the cached result from the log instead of running the activity again. The workflow code runs again; the side effects don't.
+
+This means workflow code has one strict rule: **it must be deterministic**. No real I/O, no `random`, no `datetime.now()`, no `asyncio.sleep()` directly. Temporal provides sandboxed equivalents for all of these:
+
+| Don't use in a workflow | Use instead |
+|------------------------|-------------|
+| `logging.info()` | `workflow.logger.info()` — suppressed during replay to avoid duplicate logs |
+| `asyncio.sleep()` | `workflow.sleep()` — returns immediately if already completed in history |
+| `datetime.now()` | `workflow.now()` — returns the deterministic time from the event log |
+| Any real I/O | `workflow.execute_activity()` — returns cached result during replay |
+
+If you break determinism, Temporal raises a non-determinism error on replay. This is a feature — it catches bugs that would otherwise silently corrupt workflow state.
+
+### Why two workflow classes?
+
+**`MeltdownDemoWorkflow`** is the brain. It makes decisions: runs the assignment agents to pick which crew gets a new order and handles customer changes. It never does delivery work directly — it delegates to child workflows.
+
+**`CrewRouteWorkflow`** is the legs. One instance per crew, it executes the physical route for that crew: navigate to kitchen → pick up → for each order, navigate to hotel → deliver → loop. It doesn't decide anything — it just carries out what it's been told via signals.
+
+The two connect through signals. When `MeltdownDemoWorkflow` decides "AI-Crew 2 gets this order," it sends an `add_order` signal to AI-Crew 2's `CrewRouteWorkflow`, which picks it up and adds it to its delivery loop.
+
+```
+New order arrives
+  → MeltdownDemoWorkflow runs assignment agents → "give this to AI-Crew 2"
+  → sends add_order signal to CrewRouteWorkflow (ai-crew-2)
+  → CrewRouteWorkflow executes the delivery
+```
+
+It has its own `add_order` signal and its own retry boundary.
+
+The key design principle: **child workflows give you fault isolation**. Each crew runs in a completely independent workflow execution. If AI-Crew 1's workflow hits an unrecoverable error, AI-Crew 2 and 3 keep running. You can't get that isolation by putting all three routes inside one class.
+
+### Where the ADK agents fit
+
+The agents are not workflows — they run inside **activities**. `reason_about_assignment` is a regular Temporal activity that spins up an ADK runner internally. The workflow calls the activity; the activity runs the agents. This is the right layering: the workflow handles durability and coordination, the activity handles the work.
+
+### How `TemporalModel` and `activity_tool` work — and why you don't define agent activities explicitly
+
+A common question from engineers: "where are the Temporal activities defined for each agent's LLM call and tool call?" The answer is they aren't — they're injected automatically by two wrappers:
+
+- **`TemporalModel(DEFAULT_MODEL)`** — when you set this as an agent's model, every LLM call that agent makes is automatically executed as a Temporal `invoke_model` activity. You don't write the activity. The wrapper does it.
+- **`activity_tool(tool_get_fleet_status, ...)`** — when you wrap a tool function this way, every time an agent calls that tool it executes as a Temporal activity. Again, no explicit activity definition needed.
+
+So when Fleet Agent calls Gemini and then calls `tool_get_fleet_status`, both of those are Temporal activities — durable, retryable, and recorded in the event log — purely by inheritance from the wrappers. This is the `temporalio[google-adk]` integration doing its job.
+
+**The division of responsibility:**
+
+ADK owns the agent orchestration — the sequencing of Fleet → Customer → Resolver via `SequentialAgent` and `ParallelAgent`, the multi-turn reasoning loop, passing context between agents. Temporal owns the durability of every external call those agents make.
+
+An alternative "more Temporal-native" design would be to put the Fleet → Customer → Resolver sequencing directly in the workflow and only push the raw LLM calls into activities. That gives you more explicit visibility in the Temporal UI — each agent step shows up as a named workflow step. The tradeoff is you'd be rewriting ADK's orchestration in Temporal workflow code, giving up ADK's agent composition primitives.
+
+The current design keeps both frameworks doing what they're best at: **ADK composes and sequences agents, Temporal makes every external call durable.** The replay safety is there either way — it's a question of where the orchestration logic lives and how much of it is visible in the Temporal event log.
+
+### The 3-queue worker architecture
+
+The demo runs three Temporal workers in the same Python process, each on a dedicated task queue:
+
+| Queue | Worker | Activities |
+|---|---|---|
+| `meltdown-orchestration` | Orchestration | `generate_order`, workflows |
+| `meltdown-delivery` | Delivery | `navigate_to`, `pickup_orders`, `deliver_order`, `execute_customer_change`, `get_route_polyline`, `publish_agent_event` |
+| `meltdown-agents` | Agents | `reason_about_assignment`, `register_assignment`, all `tool_*` activities |
+
+**Why separate queues?** LLM calls are slow — a single Gemini call can take 3–5 seconds. Without queue separation, a flood of assignment requests could fill all worker slots and starve navigation activities, causing crews to miss heartbeat timeouts. The agents queue is rate-limited to 5 concurrent activities; the delivery queue runs 20; the orchestration queue runs 50.
+
+**Why in-process?** All three workers share the `FleetState` singleton in memory. Splitting them into separate processes would require a shared state layer (Redis, Postgres). For a demo, in-process gives you the right separation of concerns without the operational overhead.
+
+The `activity_tool()` wrappers in `agents.py` pass `task_queue=AGENTS_QUEUE` through to `execute_activity()`, so ADK tool calls are automatically routed to the agents worker. The `TemporalModel` wrapper routes LLM calls the same way via the `GoogleAdkPlugin`.
+
+### What this would look like without Temporal
+
+Without Temporal, the same orchestration would require:
+- A state machine in a database (enum column per crew tracking route phase)
+- Manual retry loops with custom backoff for every activity
+- A polling loop to implement "wait for human approval" (`while not db.get("approved"): sleep(1)`)
+- Defensive DB writes before every step so a crash doesn't lose position
+- Manual reconstruction of in-flight state on worker restart
+
+Temporal collapses all of that into the workflow execution model. The event log *is* the state persistence. `execute_activity` *is* the retry logic. Signals *are* the message passing. The workflow code reads like a straightforward sequential program because Temporal handles everything else.
+
+---
+
 ## Demo Scenarios
 
 ---
 
-### Demo 1: Agent Disconnect — ADK + Temporal Working Together
-**Time: 2–3 min | Best for: opening with why the integration matters**
+### Demo 1: Continuous Order Flow — Agents Reasoning in Real Time
+**Time: 1–2 min | Best for: opening with the "living system" feel**
 
-**Setup:** Start deliveries. Let crews get moving, then disconnect an agent before the delivery plan coordination completes — or reset and trigger immediately after start.
+**Setup:** Click **Start Deliveries**. Orders auto-generate every 15 seconds from 3 Las Vegas hotels (MGM Grand, Caesars Palace, Mandalay Bay).
 
-**Steps:**
-1. Click **Disconnect Agent** (Fleet Agent) shortly after deliveries begin
-2. The Agent Reasoning panel shows Fleet Agent going offline
-3. The other agents (Customer Agent, Resolver) continue reasoning and coordinate without it
-4. The Resolver produces a plan based on available information — Temporal records it as an activity result
-5. Click **Reconnect Agent** — Fleet Agent comes back online and is available for future events
+**What happens automatically:**
+1. Each order triggers multi-agent reasoning — watch the Agent Reasoning panel
+2. Fleet Agent scans crew positions and capacity, recommends the closest available crew
+3. Customer Agent evaluates priority — Mandalay Bay orders are always VIP
+4. Resolver synthesizes and assigns the order to a crew
+5. Crews continuously pick up from Frosty's and deliver to hotels, looping back for more
 
 **What to say:**
-> "This is where ADK and Temporal each pull their weight. ADK handles the agent layer — when Fleet Agent goes offline, the Customer Agent and Resolver adapt. They don't crash, they degrade gracefully. Temporal handles the infrastructure layer — every reasoning step that did complete is recorded as an activity result. If the worker crashed right now, those results would be replayed. Two different resilience mechanisms, working at two different layers."
+> "This is a continuous fleet — orders keep coming in, agents keep reasoning. Every assignment is a multi-agent decision. Fleet Agent checks who's closest and has capacity. Customer Agent evaluates priority — that Mandalay Bay order is VIP. The Resolver weighs both and assigns. Each crew runs in its own child workflow, picking up and delivering in a continuous loop."
 
-**Concepts to highlight:** ADK graceful degradation (agent layer) vs. Temporal durable execution (infrastructure layer) — this is the core of the integration story
+**Temporal concept to highlight:** Child workflow isolation, continuous workflows with signals
 
 ---
 
-### Demo 2: Crew Disconnect & Auto-Recovery
+### Demo 2: Agent Disconnect — ADK + Temporal Working Together
+**Time: 2–3 min | Best for: showing why the integration matters**
+
+**Setup:** Start deliveries. Let a few orders get assigned.
+
+**Steps:**
+1. Click **Disconnect Agent** (Fleet Agent)
+2. Watch the Agent Reasoning panel — Fleet Agent shows "OFFLINE"
+3. New orders still get assigned — the Resolver notes "Fleet Agent OFFLINE — assignment based on last known positions"
+4. Customer Agent continues evaluating priority normally
+5. Click **Reconnect Agent** — Fleet Agent comes back online, next order shows full fleet assessment again
+
+**What to say:**
+> "This is where ADK and Temporal each pull their weight. ADK handles the agent layer — when Fleet Agent goes offline, the Resolver adapts. It doesn't crash, it degrades gracefully, using the last known fleet data. Temporal handles the infrastructure layer — every reasoning step that did complete is recorded. Two different resilience mechanisms, working at two different layers."
+
+**Concepts to highlight:** ADK graceful degradation (agent layer) vs. Temporal durable execution (infrastructure layer)
+
+---
+
+### Demo 3: Crew Disconnect & Auto-Recovery
 **Time: 2–3 min | Best for: showing Temporal activity retry**
 
 **Setup:** Start deliveries. Wait until at least one crew is en route.
 
 **Steps:**
 1. In the Failure Modes panel, select a crew and click **Disconnect Crew**
-2. That crew's status changes to `DISCONNECTED`, its dot stops moving
+2. That crew's status changes to `DISCONNECTED`, its truck stops moving
 3. The other two crews keep delivering normally
 4. Wait 10–15 seconds, then click **Reconnect Crew**
 5. The crew's status shows a brief "recovering" state, then resumes
@@ -106,10 +214,10 @@ This is the "aha" moment. Return to it whenever you trigger a crash.
 
 ---
 
-### Demo 3: Customer Change — Human-in-the-Loop
+### Demo 4: Customer Change — Human-in-the-Loop
 **Time: 2 min | Best for: showing signals and workflow waiting**
 
-**Setup:** Start deliveries.
+**Setup:** Start deliveries. Wait for a few orders to be assigned.
 
 **Steps:**
 1. In the Customer Changes panel, select an order and click **Submit Change Request**
@@ -124,60 +232,13 @@ This is the "aha" moment. Return to it whenever you trigger a crash.
 
 ---
 
-### Demo 4: Full System Crash & Temporal Replay
-**Time: 2–3 min | Best for: the most visceral Temporal moment**
-
-**Setup:** Start deliveries. Let crews get partway to their destinations — the further along, the more dramatic the resume.
-
-**Steps:**
-1. Click **Crash Service** — a red overlay appears: "Service Crashed"
-2. Point to the map: crews are frozen mid-route
-3. Open the Temporal UI — show the workflow is still "Running" (not failed). *"The workflow state lives in Temporal, not in our service. The work isn't lost."*
-4. Click **Restart Service** — blue "Replaying..." overlay appears for ~4 seconds
-5. Crews resume from their exact positions
-
-**What to say:**
-> "Notice the crews didn't restart from the kitchen — they resumed mid-route. Temporal replayed the workflow event history. Our worker re-executed the same code path, but when it hit activities that already completed, Temporal returned the cached result. The agents didn't re-call Gemini. It just... continued."
-
-**Temporal concept to highlight:** Deterministic replay, event sourcing
-
----
-
-### Demo 5: Cooler Malfunction — Multi-Agent Recovery
-**Time: 4–5 min | Best for: closing with the full ADK agent composition story**
-
-**Setup:** Start deliveries. This is the most complex demo — give it space and let the agent reasoning panel breathe.
-
-**Steps:**
-1. Click **Trigger Cooler Malfunction** (defaults to AI-Crew 1 at nav step 5)
-2. Watch the map — when the malfunction triggers, the affected crew's orders turn orange/at-risk
-3. The Agent Reasoning panel starts populating — narrate as events appear:
-   - Fleet Agent calls `tool_get_fleet_status` → assesses routes and capacity
-   - Fleet Agent calls `tool_get_route_info` (Google Maps) → checks ETAs for backup crew
-   - Customer Agent researches the hotel → checks for VIP events, context
-   - Customer Agent assesses order priorities
-   - Resolver Agent synthesizes both assessments into a recovery plan
-4. A "Recommendation Pending" event appears — **Approve / Reject** button becomes active
-5. Click **Approve** — orders are rerouted to a backup crew, the affected crew returns to base
-
-**What to say (during agent reasoning):**
-> "Fleet Agent and Customer Agent are running in parallel — that's ADK's ParallelAgent. Each tool call — Maps, fleet status, hotel search — is its own Temporal activity. Every one of those results is in the event log. If the worker crashed right now, the agents wouldn't re-call Gemini. Temporal would replay the results."
-
-> "The Resolver sees both inputs and produces a structured recovery plan — not a blob of text, but a typed object with specific order IDs and crew assignments. The workflow reads it directly and acts on it."
-
-**ADK concepts to highlight:** ParallelAgent, SequentialAgent (Hotel Researcher → Customer Agent), tool composition, structured output via session state
-
-**Temporal concept to highlight:** Agent actions as durable activities, human-in-the-loop on `operator_decision` signal
-
----
-
 ## Handling Questions
 
 **"How is this different from just using a queue?"**
 > "A queue gives you one retry per message. Temporal gives you a complete execution model — retries, timeouts, timeouts-per-retry, backoff, heartbeating, child workflows, signals, queries. And it's all in code, not config."
 
 **"What if Gemini returns something unexpected?"**
-> "The agents use structured tool calls to submit their output — `tool_submit_recovery_plan` writes a typed object to ADK session state. The workflow reads that object. If the agent produces garbage or skips the tool call, the workflow gets `None` and falls back to a deterministic mock resolver. There's a clear contract."
+> "The agents use structured tool calls to submit their output — `tool_submit_assignment` writes a typed object to ADK session state. The workflow reads that object. If the agent produces garbage or skips the tool call, the workflow gets `None` and falls back to a deterministic mock resolver. There's a clear contract."
 
 **"Is this production-ready?"**
 > "The pattern is production-ready — Temporal runs at Stripe, Netflix, Uber. ADK is Google's framework for building agents at scale. The integration shown here (`TemporalModel`, `activity_tool`, `GoogleAdkPlugin`) is the `temporalio[google-adk]` package, which is the official integration."
@@ -187,6 +248,6 @@ This is the "aha" moment. Return to it whenever you trigger a crash.
 ## Reset Between Demos
 
 1. Click **Reset** on the dashboard
-2. Verify all crews return to `IDLE`, orders return to `PENDING`
+2. Verify all crews return to idle at Frosty's Ice Cream
 3. If any workflows are stuck, run: `temporal workflow list` and cancel manually
 4. Refresh the browser before the next run

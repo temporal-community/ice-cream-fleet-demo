@@ -159,8 +159,6 @@
   .btn:active { transform: scale(0.97); }
   .btn-start { background: #22c55e; color: #fff; }
   .btn-start:hover { background: #16a34a; }
-  .btn-crash { background: #ef4444; color: #fff; }
-  .btn-crash:hover { background: #dc2626; }
   .btn-restart { background: #3b82f6; color: #fff; }
   .btn-restart:hover { background: #2563eb; }
   .btn-disrupt { background: #f97316; color: #fff; }
@@ -408,50 +406,7 @@
     color: #38bdf8;
   }
 
-  .btn-inject { background: #1e1e3d; color: var(--temporal-uv); border: 1px solid var(--temporal-uv-dim); }
-  .btn-inject:hover { background: #2a2a5a; }
-
   .entry-content.has-summary { cursor: pointer; }
-
-  /* Disruption alert banner */
-  #disruption-alert {
-    display: none;
-    position: fixed;
-    top: 56px;
-    left: 420px;
-    right: 0;
-    background: rgba(249, 115, 22, 0.92);
-    z-index: 999;
-    pointer-events: none;
-    padding: 10px 0;
-    text-align: center;
-    animation: disruption-flash 0.5s ease-out;
-  }
-  #disruption-alert .alert-text {
-    font-size: 14px;
-    font-weight: 700;
-    color: #fff;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-  }
-  #disruption-alert .alert-sub {
-    font-size: 11px;
-    font-weight: 400;
-    color: rgba(255,255,255,0.85);
-    letter-spacing: 0.5px;
-    margin-top: 2px;
-  }
-  @keyframes disruption-flash {
-    0% { opacity: 0; transform: translateY(-10px); }
-    100% { opacity: 1; transform: translateY(0); }
-  }
-
-  /* Agent box disruption mode */
-  .agent-box-status.thinking[data-mode="disruption"] {
-    background: #431407;
-    color: #f97316;
-    animation: pulse 1s infinite;
-  }
 
   .agent-empty {
     color: #4b5563;
@@ -507,8 +462,6 @@
   .priority-standard { color: #6b7280; }
 
   .detail { font-size: 11px; color: #6b7280; margin-top: 2px; }
-  .cooler-warn { color: #f97316; font-weight: 600; }
-  .cooler-fail { color: #ef4444; font-weight: 600; }
 
   @keyframes pulse {
     0%, 100% { opacity: 1; }
@@ -846,65 +799,6 @@
   }
   .event-log .event-time { color: #4b5563; }
 
-  /* --- Crash banner --- */
-  #crash-overlay {
-    display: none;
-    position: fixed;
-    top: 56px;
-    left: 420px;
-    right: 0;
-    background: rgba(239, 68, 68, 0.92);
-    z-index: 1000;
-    pointer-events: none;
-    padding: 10px 0;
-    text-align: center;
-    animation: crash-flash 0.4s ease-out;
-  }
-  #crash-overlay .crash-text {
-    font-size: 14px;
-    font-weight: 700;
-    color: #fff;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-  }
-  @keyframes crash-flash {
-    0% { opacity: 0; }
-    100% { opacity: 1; }
-  }
-
-  /* --- Replay banner --- */
-  #replay-overlay {
-    display: none;
-    position: fixed;
-    top: 56px;
-    left: 420px;
-    right: 0;
-    background: rgba(68, 76, 231, 0.92);
-    z-index: 1001;
-    pointer-events: none;
-    padding: 10px 0;
-    text-align: center;
-    animation: replay-pulse 1.5s ease-in-out infinite;
-  }
-  #replay-overlay .replay-text {
-    font-size: 14px;
-    font-weight: 700;
-    color: #fff;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-  }
-  #replay-overlay .replay-sub {
-    font-size: 11px;
-    font-weight: 400;
-    color: rgba(255,255,255,0.8);
-    letter-spacing: 0.5px;
-    margin-top: 2px;
-  }
-  @keyframes replay-pulse {
-    0%, 100% { opacity: 0.85; }
-    50% { opacity: 1; }
-  }
-
   /* --- Agent snippet styles --- */
   .entry-content {
     max-height: 2.4em;
@@ -973,10 +867,10 @@
     padding: 8px 0;
     text-align: center;
   }
-  .crew-disconnect-banner.active { display: block; animation: crash-flash 0.4s ease-out; }
+  .crew-disconnect-banner.active { display: block; animation: none; }
   .crew-disconnect-banner.recovering {
     background: rgba(56, 189, 248, 0.88);
-    animation: replay-pulse 1.5s ease-in-out infinite;
+    animation: none;
   }
   .crew-disconnect-banner .banner-text {
     font-size: 13px;
@@ -1033,10 +927,8 @@
 
 <div class="tab-bar">
   <button class="tab active" data-tab="agent" onclick="switchTab('agent')">Agent Disconnect</button>
-  <button class="tab" data-tab="cooler" onclick="switchTab('cooler')">Cooler Malfunction</button>
   <button class="tab" data-tab="crew" onclick="switchTab('crew')">Crew Disconnect</button>
   <button class="tab" data-tab="customer" onclick="switchTab('customer')">Customer Change</button>
-  <button class="tab" data-tab="crash" onclick="switchTab('crash')">Full Service Crash</button>
   <div class="status-area">
     <div id="worker-status" class="worker-indicator online">
       <div class="worker-dot"></div>
@@ -1052,17 +944,8 @@
       <option value="customer_agent">Customer Agent</option>
       <option value="resolver">Resolver</option>
     </select>
-    <button class="btn btn-crash" onclick="disconnectAgent()">Service Disconnect</button>
+    <button class="btn" onclick="disconnectAgent()">Service Disconnect</button>
     <button class="btn btn-restart" onclick="reconnectAgent()">Reconnect</button>
-    <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
-  </div>
-  <div class="tab-panel" id="panel-cooler">
-    <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
-    <button class="btn btn-disrupt" onclick="triggerDisruption()">Trigger Cooler Malfunction</button>
-    <button class="btn btn-inject" id="btn-inject" onclick="injectConditions()" style="display:none;">Inject New Conditions</button>
-    <button class="btn btn-approve" id="btn-operator-approve" onclick="operatorDecision('approve')" style="display:none;">Approve Plan</button>
-    <button class="btn btn-reject" id="btn-operator-reject" onclick="operatorDecision('reject')" style="display:none;">Reject Plan</button>
-    <span id="operator-status" style="font-size:11px;color:#fbbf24;display:none;"></span>
     <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
   </div>
   <div class="tab-panel" id="panel-crew">
@@ -1072,14 +955,8 @@
       <option value="ai-crew-2">AI-Crew 2</option>
       <option value="ai-crew-3">AI-Crew 3</option>
     </select>
-    <button class="btn btn-crash" onclick="disconnectCrew()">Disconnect Crew</button>
+    <button class="btn" onclick="disconnectCrew()">Disconnect Crew</button>
     <button class="btn btn-restart" onclick="reconnectCrew()">Reconnect Crew</button>
-    <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
-  </div>
-  <div class="tab-panel" id="panel-crash">
-    <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
-    <button class="btn btn-crash" onclick="crashService()">Crash Entire Service</button>
-    <button class="btn btn-restart" onclick="restartService()">Reconnect</button>
     <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
   </div>
   <div class="tab-panel" id="panel-customer">
@@ -1170,20 +1047,6 @@
 </div>
 
 <div id="map"></div>
-
-<div id="crash-overlay">
-  <div class="crash-text">Service Crashed — Deliveries Frozen, Awaiting Recovery</div>
-</div>
-
-<div id="disruption-alert">
-  <div class="alert-text">Cooler Malfunction Detected</div>
-  <div class="alert-sub">Agents coordinating emergency response...</div>
-</div>
-
-<div id="replay-overlay">
-  <div class="replay-text">Replaying...</div>
-  <div class="replay-sub">Restoring workflow state from durable history</div>
-</div>
 
 <div id="crew-disconnect-banner" class="crew-disconnect-banner">
   <div class="banner-text"><span id="crew-banner-text">AI-Crew Disconnected</span></div>
@@ -1382,8 +1245,6 @@ function connectWS() {
     updateOrders(state.orders);
     updateAgentEvents(state.agent_events, state.agent_health);
     updateEventLog(state.event_log);
-    updateRecoveryOverlay(state.recovery);
-    updateDisruptionAlert(state.crews, state.orders);
     updateCrewDisconnectBanner(state.crews);
   };
   ws.onclose = () => setTimeout(connectWS, 1000);
@@ -1395,7 +1256,6 @@ function updateCrews(crews) {
   Object.values(crews).forEach(c => {
     const pos = [c.position.lat, c.position.lng];
     const color = CREW_COLORS[c.status] || '#94a3b8';
-    const hasAlert = c.cooler_status === 'malfunction' || c.cooler_status === 'failed';
 
     // Calculate bearing from previous position
     let bearing = prevPositions[c.crew_id]?.bearing || 0;
@@ -1406,14 +1266,14 @@ function updateCrews(crews) {
     prevPositions[c.crew_id] = { pos, bearing };
 
     if (!crewMarkers[c.crew_id]) {
-      crewMarkers[c.crew_id] = L.marker(pos, { icon: crewIcon(color, hasAlert, bearing) }).addTo(map);
+      crewMarkers[c.crew_id] = L.marker(pos, { icon: crewIcon(color, false, bearing) }).addTo(map);
       crewMarkers[c.crew_id].bindTooltip(c.crew_id, { direction: 'top', offset: [0, -24] });
       crewTrails[c.crew_id] = L.polyline([], {
         color, weight: 2, opacity: 0.4, dashArray: '4 6',
       }).addTo(map);
     } else {
       crewMarkers[c.crew_id].setLatLng(pos);
-      crewMarkers[c.crew_id].setIcon(crewIcon(color, hasAlert, bearing));
+      crewMarkers[c.crew_id].setIcon(crewIcon(color, false, bearing));
     }
 
     if (c.status === 'idle') {
@@ -1429,17 +1289,10 @@ function updateCrews(crews) {
   const container = document.getElementById('crew-cards');
   container.innerHTML = Object.values(crews).map(c => {
     const orders = c.current_orders.length > 0 ? c.current_orders.join(', ') : 'none';
-    let coolerHtml = '';
-    if (c.cooler_status === 'malfunction') {
-      coolerHtml = `<span class="cooler-warn">Cooler: ${c.cooler_temp_f.toFixed(0)}F MALFUNCTION</span>`;
-    } else if (c.cooler_status === 'failed') {
-      coolerHtml = `<span class="cooler-fail">Cooler: FAILED</span>`;
-    }
     return `
       <div class="card">
         <h3>${c.crew_id} <span class="status-pill status-${c.status}">${c.status.replace(/_/g, ' ')}</span></h3>
         <div class="detail">Orders: ${orders}</div>
-        ${coolerHtml ? `<div class="detail">${coolerHtml}</div>` : ''}
       </div>
     `;
   }).join('');
@@ -1473,19 +1326,6 @@ let prevTotalCount = 0;
 
 const SNIPPET_LEN = 120;
 
-// Detect phases: events with "COOLER FAILURE" or "DISRUPTION" mark the start of disruption phase
-function detectPhase(events) {
-  let disruptionStartIdx = -1;
-  for (let i = 0; i < events.length; i++) {
-    const c = events[i].content.toUpperCase();
-    if (c.includes('COOLER FAILURE') || c.includes('DISRUPTION DETECTED') || c.includes('COOLER MALFUNCTION')) {
-      disruptionStartIdx = i;
-      break;
-    }
-  }
-  return disruptionStartIdx;
-}
-
 function updateAgentEvents(events, agentHealth) {
   if (!events) return;
 
@@ -1512,10 +1352,6 @@ function updateAgentEvents(events, agentHealth) {
     if (grouped[e.agent_name]) grouped[e.agent_name].push(e);
   });
 
-  // Detect if we're in disruption phase — new events still arriving after disruption marker
-  const disruptionIdx = detectPhase(events);
-  const inDisruptionPhase = disruptionIdx >= 0;
-
   // Are events still arriving? (count changed since last update)
   const stillReceiving = totalCount > prevTotalCount;
 
@@ -1523,18 +1359,11 @@ function updateAgentEvents(events, agentHealth) {
   const resolverEvents = grouped.resolver;
   const latestResolverPlan = resolverEvents.filter(e => e.event_type === 'plan');
 
-  // Count plans to know which phase is complete
-  // Phase 1 (coordination): first plan event
-  // Phase 2 (disruption): second plan event
-  const planCount = latestResolverPlan.length;
-  const coordinationComplete = planCount >= 1;
-  const disruptionComplete = planCount >= 2;
+  // Coordination complete when at least one plan event exists
+  const coordinationComplete = latestResolverPlan.length >= 1;
 
   // Determine if agents are actively reasoning right now
-  const isActivelyReasoning = stillReceiving && (
-    (inDisruptionPhase && !disruptionComplete) ||
-    (!inDisruptionPhase && !coordinationComplete)
-  );
+  const isActivelyReasoning = stillReceiving && !coordinationComplete;
 
   AGENT_IDS.forEach(agentId => {
     const box = document.getElementById(`agent-box-${agentId}`);
@@ -1565,7 +1394,7 @@ function updateAgentEvents(events, agentHealth) {
     if (!isOffline) {
       if (isThinking) {
         statusEl.className = 'agent-box-status thinking';
-        statusEl.textContent = inDisruptionPhase ? 'Disruption' : 'Reasoning';
+        statusEl.textContent = 'Reasoning';
       } else {
         statusEl.className = 'agent-box-status done';
         statusEl.textContent = 'Complete';
@@ -1574,20 +1403,9 @@ function updateAgentEvents(events, agentHealth) {
 
     // Only re-render if event count changed
     if (agentEvents.length !== prevEventCounts[agentId]) {
-      // Insert phase separator if there's a disruption phase
       let html = '';
-      let passedDisruption = false;
 
       agentEvents.forEach((e, idx) => {
-        // Check if this event is the start of disruption content for this agent
-        if (!passedDisruption && inDisruptionPhase) {
-          const c = e.content.toUpperCase();
-          if (c.includes('COOLER FAILURE') || c.includes('COOLER MALFUNCTION') || c.includes('CUSTOMER IMPACT')) {
-            passedDisruption = true;
-            html += `<div class="phase-separator"><span>DISRUPTION RESPONSE</span></div>`;
-          }
-        }
-
         const isLast = idx === agentEvents.length - 1;
         const full = e.content;
         const summary = e.summary || '';
@@ -1611,15 +1429,6 @@ function updateAgentEvents(events, agentHealth) {
             ${(isLong || hasSummary) ? '<div class="entry-ellipsis" onclick="toggleEntry(this.previousElementSibling)">click to expand</div>' : ''}
           </div>
         `;
-        // Show approve/reject buttons when resolver emits a "plan" event
-        if (e.agent_name === 'resolver' && (e.event_type === 'plan' || e.event_type === 'recommendation_pending') && isLast) {
-          const approveBtn = document.getElementById('btn-operator-approve');
-          const rejectBtn = document.getElementById('btn-operator-reject');
-          const statusEl = document.getElementById('operator-status');
-          if (approveBtn) approveBtn.style.display = 'inline-block';
-          if (rejectBtn) rejectBtn.style.display = 'inline-block';
-          if (statusEl) { statusEl.style.display = 'inline'; statusEl.textContent = 'Recommendation pending — awaiting approval'; }
-        }
       });
 
       body.innerHTML = html;
@@ -1659,71 +1468,6 @@ function updateEventLog(events) {
   }).join('');
 }
 
-// --- Disruption alert ---
-let disruptionAlertShown = false;
-let disruptionResolved = false;
-
-function updateDisruptionAlert(crews, orders) {
-  const alertEl = document.getElementById('disruption-alert');
-
-  // Detect malfunction
-  const malfunctionCrew = Object.values(crews).find(
-    c => c.cooler_status === 'malfunction' || c.cooler_status === 'failed'
-  );
-
-  // Detect if orders have been rerouted (recovery complete)
-  const hasRerouted = Object.values(orders).some(o => o.status === 'rerouted');
-
-  if (malfunctionCrew && !disruptionAlertShown) {
-    disruptionAlertShown = true;
-    alertEl.querySelector('.alert-sub').textContent =
-      `${malfunctionCrew.crew_id} cooler at ${malfunctionCrew.cooler_temp_f.toFixed(0)}F — Agents coordinating emergency response...`;
-    alertEl.style.display = 'block';
-
-    // Auto-expand crews section so audience can see the malfunction
-    const crewSection = document.getElementById('section-couriers');
-    if (crewSection.classList.contains('collapsed')) {
-      crewSection.classList.remove('collapsed');
-    }
-
-    // Show operator controls
-    document.getElementById('btn-inject').style.display = 'inline-block';
-  }
-
-  if (hasRerouted && !disruptionResolved) {
-    disruptionResolved = true;
-    alertEl.querySelector('.alert-text').textContent = 'Recovery Complete';
-    alertEl.querySelector('.alert-sub').textContent = 'Orders rerouted — backup AI-Crew en route';
-    alertEl.style.background = 'rgba(34, 197, 94, 0.92)';
-    // Fade out after 4s
-    setTimeout(() => { alertEl.style.display = 'none'; }, 4000);
-  }
-}
-
-// --- Recovery overlay (driven by WebSocket state) ---
-function updateRecoveryOverlay(recovery) {
-  if (!recovery) return;
-  const replayEl = document.getElementById('replay-overlay');
-  const crashEl = document.getElementById('crash-overlay');
-  if (recovery.phase) {
-    // Replaying: show blue overlay, hide red crash overlay
-    crashEl.style.display = 'none';
-    replayEl.style.display = 'block';
-    // Also update worker status to show replaying
-    const wsEl = document.getElementById('worker-status');
-    wsEl.className = 'worker-indicator online';
-    wsEl.innerHTML = '<div class="worker-dot"></div><span>Replaying...</span>';
-  } else {
-    replayEl.style.display = 'none';
-    // Restore worker status to Online after replay completes
-    const wsEl = document.getElementById('worker-status');
-    if (wsEl.innerHTML.includes('Replaying')) {
-      wsEl.className = 'worker-indicator online';
-      wsEl.innerHTML = '<div class="worker-dot"></div><span>Online</span>';
-    }
-  }
-}
-
 // --- API helpers ---
 async function api(endpoint, method = 'POST', body = null) {
   const opts = { method };
@@ -1738,32 +1482,6 @@ async function api(endpoint, method = 'POST', body = null) {
 async function startDemo() {
   const result = await api('start');
   console.log('Started:', result);
-}
-
-async function crashService() {
-  workerOnline = false;
-  const el = document.getElementById('worker-status');
-  el.className = 'worker-indicator offline';
-  el.innerHTML = '<div class="worker-dot"></div><span>Service OFFLINE</span>';
-  document.getElementById('crash-overlay').style.display = 'block';
-  const result = await api('crash-service');
-  console.log('Crashed:', result);
-}
-
-async function restartService() {
-  const result = await api('restart-service');
-  workerOnline = true;
-  // Don't hide crash overlay here — WebSocket state drives the transition
-  // via updateRecoveryOverlay: crash(red) -> replay(blue) -> normal
-  console.log('Restarted:', result);
-}
-
-async function triggerDisruption() {
-  const result = await api('trigger-disruption', 'POST', {
-    crew_id: 'ai-crew-1',
-    at_nav_step: 5,
-  });
-  console.log('Disruption armed:', result);
 }
 
 async function submitCustomerChange() {
@@ -1807,35 +1525,6 @@ async function approveChange(approved) {
     statusEl.style.display = 'none';
     statusEl.style.color = '#fbbf24';
   }, 3000);
-}
-
-async function operatorDecision(action) {
-  const result = await api('operator-decision', 'POST', { action });
-  console.log('Operator decision:', result);
-  const statusEl = document.getElementById('operator-status');
-  statusEl.textContent = action === 'approve' ? 'Plan approved — executing recovery' : 'Plan rejected — agents re-evaluating';
-  statusEl.style.color = action === 'approve' ? '#22c55e' : '#ef4444';
-  document.getElementById('btn-operator-approve').style.display = 'none';
-  document.getElementById('btn-operator-reject').style.display = 'none';
-  if (action === 'approve') {
-    document.getElementById('btn-inject').style.display = 'none';
-    setTimeout(() => { statusEl.style.display = 'none'; }, 3000);
-  }
-}
-
-async function injectConditions() {
-  const result = await api('inject-conditions', 'POST', {
-    description: 'Traffic delay on Las Vegas Blvd — AI-Crew 2 detoured 10 minutes',
-    crew_id: 'ai-crew-2',
-    details: 'Heavy traffic near Caesars Palace',
-  });
-  console.log('Conditions injected:', result);
-  const statusEl = document.getElementById('operator-status');
-  statusEl.style.display = 'inline';
-  statusEl.textContent = 'New conditions injected — agents re-evaluating...';
-  statusEl.style.color = '#fbbf24';
-  document.getElementById('btn-operator-approve').style.display = 'none';
-  document.getElementById('btn-operator-reject').style.display = 'none';
 }
 
 // --- Per-crew disconnect/reconnect ---
@@ -1891,21 +1580,6 @@ async function reconnectAgent() {
 async function resetDemo() {
   Object.values(crewTrails).forEach(t => t.setLatLngs([]));
   const result = await api('reset');
-  document.getElementById('crash-overlay').style.display = 'none';
-  document.getElementById('replay-overlay').style.display = 'none';
-  const disruptEl = document.getElementById('disruption-alert');
-  disruptEl.style.display = 'none';
-  disruptEl.style.background = 'rgba(249, 115, 22, 0.92)';
-  disruptEl.querySelector('.alert-text').textContent = 'Cooler Malfunction Detected';
-  disruptionAlertShown = false;
-  disruptionResolved = false;
-  // Reset operator controls
-  document.getElementById('btn-inject').style.display = 'none';
-  document.getElementById('btn-operator-approve').style.display = 'none';
-  document.getElementById('btn-operator-reject').style.display = 'none';
-  const opStatus = document.getElementById('operator-status');
-  opStatus.style.display = 'none';
-  opStatus.style.color = '#fbbf24';
   const el = document.getElementById('worker-status');
   el.className = 'worker-indicator online';
   el.innerHTML = '<div class="worker-dot"></div><span>Service Online</span>';

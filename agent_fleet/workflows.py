@@ -3,8 +3,7 @@ Temporal workflows for the Meltdown ice cream delivery demo.
 
 MeltdownDemoWorkflow — main orchestrator. Starts 3 crew child workflows,
 generates orders on a timer, runs multi-agent reasoning per order, and
-signals the chosen crew. Handles disruption and customer-change signals
-concurrently.
+signals the chosen crew. Handles customer-change signals concurrently.
 
 CrewRouteWorkflow — per-crew continuous delivery loop (child workflow).
 Waits for orders via signal, picks up at the shop, delivers, repeats.
@@ -21,10 +20,10 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     import os
 
+    from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE
     from agent_fleet.activities import (
         deliver_order,
         execute_customer_change,
-        execute_recovery,
         generate_order,
         get_route_polyline,
         navigate_to,
@@ -32,30 +31,23 @@ with workflow.unsafe.imports_passed_through():
         publish_agent_event,
         reason_about_assignment,
         register_assignment,
-        resolve_disruption_mock,
     )
     from agent_fleet.locations import WAREHOUSE
     from agent_fleet.models import (
         AgentDisconnectInput,
-        ConditionUpdate,
         CrewDisconnectInput,
         CrewRouteInput,
         CrewRouteOrder,
         CustomerChangeInput,
         DeliverInput,
-        DisruptionSignalInput,
         ExecuteCustomerChangeInput,
         GenerateOrderInput,
         MeltdownDemoInput,
         NavigateInput,
-        OperatorDecision,
         PickupInput,
         PublishAgentEventInput,
         ReasonAboutAssignmentInput,
         ReasonAboutAssignmentOutput,
-        RecoveryPlan,
-        RunDisruptionResolverInput,
-        RunDisruptionResolverOutput,
     )
 
     _MOCK_MODE = not os.environ.get("GOOGLE_API_KEY")
@@ -65,10 +57,7 @@ with workflow.unsafe.imports_passed_through():
         from google.adk.sessions import InMemorySessionService
         from google.genai.types import Content, Part
 
-        from agent_fleet.agents import (
-            create_disruption_resolver,
-            create_order_assignment_agent,
-        )
+        from agent_fleet.agents import create_order_assignment_agent
 
         _ADK_IMPORTS_OK = True
     except ImportError:
@@ -99,17 +88,12 @@ class CrewRouteWorkflow:
     Continuous delivery loop for a single AI-Crew.
 
     Waits for orders via signal, picks up at the shop, delivers to hotel,
-    then returns to waiting. Loops until told to stop or return to base.
+    then returns to waiting. Loops until told to stop.
     """
 
     def __init__(self) -> None:
-        self._return_to_base = False
         self._pending_orders: list[CrewRouteOrder] = []
         self._stop = False
-
-    @workflow.signal
-    async def return_to_base(self) -> None:
-        self._return_to_base = True
 
     @workflow.signal
     async def add_order(self, order: CrewRouteOrder) -> None:
@@ -129,7 +113,7 @@ class CrewRouteWorkflow:
             # Wait for an order to arrive or stop signal
             try:
                 await workflow.wait_condition(
-                    lambda: len(self._pending_orders) > 0 or self._return_to_base or self._stop,
+                    lambda: len(self._pending_orders) > 0 or self._stop,
                     timeout=timedelta(minutes=10),
                 )
             except TimeoutError:
@@ -138,33 +122,15 @@ class CrewRouteWorkflow:
             if self._stop:
                 break
 
-            if self._return_to_base:
-                # Navigate back to shop
-                await workflow.execute_activity(
-                    navigate_to,
-                    NavigateInput(
-                        crew_id=crew_id,
-                        order_id=delivered[-1] if delivered else "return",
-                        target_lat=WAREHOUSE.lat,
-                        target_lng=WAREHOUSE.lng,
-                        leg="pickup",
-                        steps=5,
-                    ),
-                    schedule_to_close_timeout=timedelta(minutes=10),
-                    start_to_close_timeout=timedelta(seconds=120),
-                    heartbeat_timeout=timedelta(seconds=15),
-                    retry_policy=NAV_RETRY,
-                )
-                return f"AI-Crew {crew_id} returned to base after {len(delivered)} deliveries"
-
             # Process all pending orders
-            while self._pending_orders and not self._return_to_base:
+            while self._pending_orders:
                 order = self._pending_orders.pop(0)
 
                 # Navigate to shop for pickup
                 pickup_waypoints = await workflow.execute_activity(
                     get_route_polyline,
                     args=[current_lat, current_lng, WAREHOUSE.lat, WAREHOUSE.lng],
+                    task_queue=DELIVERY_QUEUE,
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
@@ -181,19 +147,18 @@ class CrewRouteWorkflow:
                         steps=15,
                         waypoints=pickup_waypoints,
                     ),
+                    task_queue=DELIVERY_QUEUE,
                     schedule_to_close_timeout=timedelta(minutes=10),
                     start_to_close_timeout=timedelta(seconds=120),
                     heartbeat_timeout=timedelta(seconds=15),
                     retry_policy=NAV_RETRY,
                 )
 
-                if self._return_to_base:
-                    break
-
                 # Pick up
                 await workflow.execute_activity(
                     pickup_orders,
                     PickupInput(crew_id=crew_id, order_ids=[order.order_id]),
+                    task_queue=DELIVERY_QUEUE,
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
@@ -210,6 +175,7 @@ class CrewRouteWorkflow:
                         order.delivery_lat,
                         order.delivery_lng,
                     ],
+                    task_queue=DELIVERY_QUEUE,
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
@@ -226,6 +192,7 @@ class CrewRouteWorkflow:
                         steps=30,
                         waypoints=delivery_waypoints,
                     ),
+                    task_queue=DELIVERY_QUEUE,
                     schedule_to_close_timeout=timedelta(minutes=10),
                     start_to_close_timeout=timedelta(seconds=120),
                     heartbeat_timeout=timedelta(seconds=15),
@@ -238,6 +205,7 @@ class CrewRouteWorkflow:
                 await workflow.execute_activity(
                     deliver_order,
                     DeliverInput(crew_id=crew_id, order_id=order.order_id),
+                    task_queue=DELIVERY_QUEUE,
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
@@ -257,26 +225,17 @@ class MeltdownDemoWorkflow:
 
     Starts 3 crew child workflows, generates orders on a timer,
     runs multi-agent reasoning per order, and signals the chosen crew.
-    Handles disruption and customer-change signals concurrently.
+    Handles customer-change signals concurrently.
     """
 
     def __init__(self) -> None:
-        self._disruption: DisruptionSignalInput | None = None
-        self._disruption_handled: bool = False
         self._pending_changes: list[CustomerChangeInput] = []
         self._pending_approvals: list[bool] = []
         self._routes_done: bool = False
-        self._operator_decision: OperatorDecision | None = None
-        self._pending_updates: list[ConditionUpdate] = []
-        self._current_recommendation: RecoveryPlan | None = None
         self._disconnected_crews: set[str] = set()
         self._disconnected_agents: set[str] = set()
 
     # --- Signals ---
-
-    @workflow.signal
-    async def disruption_detected(self, disruption: DisruptionSignalInput) -> None:
-        self._disruption = disruption
 
     @workflow.signal
     async def customer_change(self, change: CustomerChangeInput) -> None:
@@ -285,14 +244,6 @@ class MeltdownDemoWorkflow:
     @workflow.signal
     async def change_approved(self, approved: bool) -> None:
         self._pending_approvals.append(approved)
-
-    @workflow.signal
-    async def operator_decision(self, decision: OperatorDecision) -> None:
-        self._operator_decision = decision
-
-    @workflow.signal
-    async def updated_conditions(self, update: ConditionUpdate) -> None:
-        self._pending_updates.append(update)
 
     @workflow.signal
     async def crew_disconnected(self, inp: CrewDisconnectInput) -> None:
@@ -320,12 +271,9 @@ class MeltdownDemoWorkflow:
     def get_status(self) -> dict:
         return {
             "routes_done": self._routes_done,
-            "disruption_handled": self._disruption_handled,
-            "has_disruption": self._disruption is not None,
             "pending_changes": len(self._pending_changes),
             "disconnected_crews": list(self._disconnected_crews),
             "disconnected_agents": list(self._disconnected_agents),
-            "has_recommendation": self._current_recommendation is not None,
         }
 
     # --- Main entry ---
@@ -347,7 +295,7 @@ class MeltdownDemoWorkflow:
 
         # Run order generation and signal processing concurrently
         order_task = asyncio.create_task(self._order_generation_loop(route_handles, inp.max_orders))
-        signal_task = asyncio.create_task(self._signal_loop(route_handles, inp))
+        signal_task = asyncio.create_task(self._signal_loop())
 
         # Wait for order generation to complete (all orders generated + delivered)
         await order_task
@@ -479,6 +427,7 @@ class MeltdownDemoWorkflow:
                     await workflow.execute_activity(
                         register_assignment,
                         args=[assignment.crew_id, order.order_id],
+                        task_queue=AGENTS_QUEUE,
                         start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=FAST_RETRY,
                     )
@@ -488,6 +437,7 @@ class MeltdownDemoWorkflow:
                 assignment = await workflow.execute_activity(
                     reason_about_assignment,
                     assignment_input,
+                    task_queue=AGENTS_QUEUE,
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
                 )
@@ -514,11 +464,9 @@ class MeltdownDemoWorkflow:
     # --- Signal processing loop ---
 
     def _has_pending_signal(self) -> bool:
-        return (self._disruption is not None and not self._disruption_handled) or len(
-            self._pending_changes
-        ) > 0
+        return len(self._pending_changes) > 0
 
-    async def _signal_loop(self, route_handles: dict, inp: MeltdownDemoInput) -> None:
+    async def _signal_loop(self) -> None:
         while not self._routes_done:
             try:
                 await workflow.wait_condition(
@@ -531,215 +479,12 @@ class MeltdownDemoWorkflow:
             if self._routes_done:
                 break
 
-            await self._drain_pending_signals(route_handles, inp)
+            await self._drain_pending_signals()
 
-    async def _drain_pending_signals(self, route_handles: dict, inp: MeltdownDemoInput) -> None:
-        if self._disruption is not None and not self._disruption_handled:
-            self._disruption_handled = True
-            await self._disruption_loop(route_handles, inp)
-
+    async def _drain_pending_signals(self) -> None:
         while self._pending_changes:
             change = self._pending_changes.pop(0)
             await self._process_customer_change(change)
-
-    # --- Disruption handling ---
-
-    async def _disruption_loop(self, route_handles: dict, inp: MeltdownDemoInput) -> None:
-        d = self._disruption
-        iteration = 1
-        workflow.logger.info(
-            f"Disruption loop starting: crew={d.crew_id}, "
-            f"temp={d.cooler_temp_f}F, orders={d.affected_order_ids}"
-        )
-
-        while True:
-            updates = list(self._pending_updates)
-            self._pending_updates.clear()
-
-            result = await self._resolve_disruption(d, iteration=iteration, pending_updates=updates)
-
-            if result.recovery_plan is None:
-                workflow.logger.warning(f"No recovery plan produced: {result.error}")
-                if d.crew_id in route_handles:
-                    await route_handles[d.crew_id].signal(CrewRouteWorkflow.return_to_base)
-                return
-
-            self._current_recommendation = result.recovery_plan
-
-            await workflow.execute_activity(
-                publish_agent_event,
-                PublishAgentEventInput(
-                    agent_name="resolver",
-                    event_type="recommendation_pending",
-                    content=(
-                        f"Recovery plan (iteration {iteration}): "
-                        f"reroute orders {result.recovery_plan.reroute_order_ids} "
-                        f"to {result.recovery_plan.reroute_to_crew_id}, "
-                        f"return {result.recovery_plan.return_crew_id} to base"
-                    ),
-                    summary="Awaiting operator approval",
-                ),
-                start_to_close_timeout=timedelta(seconds=10),
-                retry_policy=FAST_RETRY,
-            )
-
-            self._operator_decision = None
-            await workflow.wait_condition(
-                lambda: self._operator_decision is not None or len(self._pending_updates) > 0
-            )
-
-            if self._operator_decision is not None:
-                decision = self._operator_decision
-                self._operator_decision = None
-
-                if decision.action == "approve":
-                    workflow.logger.info("Operator approved recovery plan — executing")
-                    break
-                else:
-                    workflow.logger.info(
-                        f"Operator rejected plan (notes={decision.notes!r}) — re-resolving"
-                    )
-                    iteration += 1
-                    continue
-
-            workflow.logger.info(
-                f"New conditions received during iteration {iteration} — re-resolving"
-            )
-            self._operator_decision = None
-            iteration += 1
-            continue
-
-        await self._execute_recovery(route_handles, self._current_recommendation)
-
-    async def _resolve_disruption(
-        self,
-        d: DisruptionSignalInput,
-        iteration: int = 1,
-        pending_updates: list[ConditionUpdate] | None = None,
-    ) -> RunDisruptionResolverOutput:
-        if pending_updates is None:
-            pending_updates = []
-
-        resolver_input = RunDisruptionResolverInput(
-            disruption_crew_id=d.crew_id,
-            cooler_temp_f=d.cooler_temp_f,
-            affected_order_ids=d.affected_order_ids,
-            description=d.description,
-            iteration=iteration,
-            pending_updates=pending_updates,
-        )
-
-        if not _MOCK_MODE and _ADK_IMPORTS_OK:
-            result = await self._run_adk_resolver(d)
-            if result.recovery_plan is not None:
-                return result
-            workflow.logger.warning(
-                f"ADK resolver failed ({result.error}), falling back to mock resolver"
-            )
-
-        return await workflow.execute_activity(
-            resolve_disruption_mock,
-            resolver_input,
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=FAST_RETRY,
-        )
-
-    async def _run_adk_resolver(self, d: DisruptionSignalInput) -> RunDisruptionResolverOutput:
-        resolver_agent = create_disruption_resolver()
-        if resolver_agent is None:
-            return RunDisruptionResolverOutput(
-                recovery_plan=None,
-                error="ADK not available",
-            )
-
-        session_service = InMemorySessionService()
-        runner = Runner(
-            agent=resolver_agent,
-            app_name="meltdown_demo",
-            session_service=session_service,
-        )
-
-        session = await session_service.create_session(
-            app_name="meltdown_demo",
-            user_id="workflow",
-        )
-
-        prompt = (
-            f"DISRUPTION DETECTED:\n"
-            f"AI-Crew: {d.crew_id}\n"
-            f"Cooler temperature: {d.cooler_temp_f}F and rising\n"
-            f"Affected orders: {d.affected_order_ids}\n"
-            f"Details: {d.description}\n\n"
-            f"Assess the situation from both operational and customer perspectives, "
-            f"then produce a recovery plan. The resolver MUST call "
-            f"tool_submit_recovery_plan with the structured decision."
-        )
-
-        events_count = 0
-        try:
-            async for event in runner.run_async(
-                user_id="workflow",
-                session_id=session.id,
-                new_message=Content(parts=[Part(text=prompt)]),
-            ):
-                events_count += 1
-        except Exception as e:
-            workflow.logger.error(f"Agent runner failed: {e}")
-            return RunDisruptionResolverOutput(
-                recovery_plan=None,
-                agent_events_published=events_count,
-                error=str(e),
-            )
-
-        updated_session = await session_service.get_session(
-            app_name="meltdown_demo",
-            user_id="workflow",
-            session_id=session.id,
-        )
-
-        plan_dict = (updated_session.state or {}).get("recovery_plan")
-        if plan_dict:
-            plan = RecoveryPlan(**plan_dict)
-        else:
-            plan = None
-            workflow.logger.warning("Resolver did not submit a structured plan")
-
-        workflow.logger.info(
-            f"Disruption resolver complete: {events_count} events, plan={'yes' if plan else 'no'}"
-        )
-        return RunDisruptionResolverOutput(
-            recovery_plan=plan,
-            agent_events_published=events_count,
-        )
-
-    async def _execute_recovery(
-        self,
-        route_handles: dict,
-        plan: RecoveryPlan,
-    ) -> None:
-        if plan.return_crew_id in route_handles:
-            await route_handles[plan.return_crew_id].signal(CrewRouteWorkflow.return_to_base)
-
-        await workflow.execute_activity(
-            execute_recovery,
-            plan.to_execute_recovery_input(),
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=FAST_RETRY,
-        )
-
-        if plan.reroute_to_crew_id in route_handles:
-            for oid in plan.reroute_order_ids:
-                await workflow.execute_activity(
-                    publish_agent_event,
-                    PublishAgentEventInput(
-                        agent_name="resolver",
-                        event_type="reroute",
-                        content=f"Order {oid} rerouted to {plan.reroute_to_crew_id}",
-                        summary=f"Rerouting {oid}",
-                    ),
-                    start_to_close_timeout=timedelta(seconds=10),
-                    retry_policy=FAST_RETRY,
-                )
 
     # --- Customer change handling ---
 
@@ -754,6 +499,7 @@ class MeltdownDemoWorkflow:
                     f"{change.change_type} — {change.new_details}"
                 ),
             ),
+            task_queue=DELIVERY_QUEUE,
             start_to_close_timeout=timedelta(seconds=10),
             retry_policy=FAST_RETRY,
         )
@@ -770,6 +516,7 @@ class MeltdownDemoWorkflow:
                     new_lat=change.new_lat,
                     new_lng=change.new_lng,
                 ),
+                task_queue=DELIVERY_QUEUE,
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=FAST_RETRY,
             )
@@ -780,6 +527,7 @@ class MeltdownDemoWorkflow:
                     event_type="change_executed",
                     content=f"Customer change approved and executed for {change.order_id}",
                 ),
+                task_queue=DELIVERY_QUEUE,
                 start_to_close_timeout=timedelta(seconds=10),
                 retry_policy=FAST_RETRY,
             )
@@ -791,6 +539,7 @@ class MeltdownDemoWorkflow:
                     event_type="change_rejected",
                     content=f"Customer change rejected for {change.order_id}",
                 ),
+                task_queue=DELIVERY_QUEUE,
                 start_to_close_timeout=timedelta(seconds=10),
                 retry_policy=FAST_RETRY,
             )
