@@ -116,7 +116,10 @@ echo 'export GOOGLE_CSE_ID="your-cse-id"' >> .env  # optional
 
 ### 3. Open the dashboard
 
-Navigate to http://localhost:8080
+| Interface | URL |
+|-----------|-----|
+| **Demo dashboard** | http://localhost:8080 |
+| **Temporal UI** (workflow history, event log) | http://localhost:8233 |
 
 ## Demo Flow
 

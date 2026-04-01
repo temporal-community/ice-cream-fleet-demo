@@ -261,6 +261,12 @@ Temporal collapses all of that into the workflow execution model. The event log 
 **What to say:**
 > "This is where ADK and Temporal each pull their weight. ADK handles the agent layer — when Fleet Agent goes offline, the Resolver adapts. It doesn't crash, it degrades gracefully, using the last known fleet data. Temporal handles the infrastructure layer — every reasoning step that did complete is recorded. Two different resilience mechanisms, working at two different layers."
 
+**What you'll see in Temporal UI** (`meltdown-demo` workflow → History tab):
+- Each order assignment shows a cluster of activities: `invoke_model` (the Gemini call), `tool_get_fleet_status`, `tool_publish_agent_event`, etc. — these are the ADK agents' LLM and tool calls, recorded individually as durable Temporal activities
+- When Fleet Agent is offline, `reason_about_assignment` still completes cleanly — no retry, no error. ADK handled the degradation in the application layer; Temporal just recorded the result
+- On reconnect, the next assignment shows more `invoke_model` calls — Fleet Agent is reasoning again
+- Point to this and say: *"If this worker crashed right now mid-reasoning, Temporal would replay these results from the log. The agent would resume without re-calling Gemini."*
+
 **Concepts to highlight:** ADK graceful degradation (agent layer) vs. Temporal durable execution (infrastructure layer)
 
 ---
@@ -280,6 +286,13 @@ Temporal collapses all of that into the workflow execution model. The event log 
 **What to say:**
 > "When we disconnect the crew, the navigation activity starts failing and throwing errors. Temporal catches it and retries — with exponential backoff, no maximum attempt limit. The other crews are unaffected because each crew runs in its own child workflow. When we reconnect, the next retry succeeds, and the crew picks up exactly where it stopped."
 
+**What you'll see in Temporal UI** (`route-ai-crew-X` workflow → History tab):
+- Open the child workflow for the disconnected crew (search `route-ai-crew-1`, `route-ai-crew-2`, or `route-ai-crew-3`)
+- The `navigate_to` activity shows repeated `ActivityTaskScheduled` → `ActivityTaskStarted` → `ActivityTaskFailed` cycles — that's Temporal retrying with exponential backoff
+- Each failed attempt is timestamped — you can see the backoff intervals growing
+- On reconnect: `ActivityTaskStarted` → `ActivityTaskCompleted` — the retry succeeded, crew resumes
+- Open the other two crew workflows side by side — they show a clean stream of completed activities, completely unaffected. That's child workflow isolation.
+
 **Temporal concept to highlight:** Activity retry policies, child workflow isolation
 
 ---
@@ -297,6 +310,13 @@ Temporal collapses all of that into the workflow execution model. The event log 
 
 **What to say:**
 > "The workflow is literally paused here — waiting for a human signal. There's no polling, no timeout hack, no database flag. Temporal persists the workflow state indefinitely. If I closed the server right now and restarted it, the workflow would still be waiting for this approval. That's what durable execution means."
+
+**What you'll see in Temporal UI** (`meltdown-demo` workflow → History tab):
+- Immediately after submitting the change: a `WorkflowExecutionSignaled` event appears with signal name `customer_change` — Temporal received the signal and recorded it
+- The event history then **stops growing** — no new activities are scheduled. The workflow is suspended, waiting
+- The workflow status shows "Running" even though nothing is executing — it's parked on `wait_condition`, alive and durable
+- When you approve: a second `WorkflowExecutionSignaled` event appears (`change_approved`), then immediately `execute_customer_change` and `publish_agent_event` activities complete
+- Point to the gap in the event log: *"This silence is the workflow waiting. No polling. No timer. Temporal is just holding state until the signal arrives — which could be seconds or days."*
 
 **Temporal concept to highlight:** Signals, `wait_condition`, indefinite workflow suspension
 
