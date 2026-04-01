@@ -4,18 +4,18 @@ import pytest
 from temporalio.testing import ActivityEnvironment
 
 from agent_fleet.activities import (
-    assign_orders,
     deliver_order,
     find_backup_crew,
+    generate_order,
     navigate_to,
     pickup_orders,
 )
 from agent_fleet.models import (
-    AssignOrdersInput,
     CoolerStatus,
     CrewStatus,
     DeliverInput,
     FindBackupCrewInput,
+    GenerateOrderInput,
     NavigateInput,
     OrderStatus,
     PickupInput,
@@ -28,19 +28,22 @@ def env():
     return ActivityEnvironment()
 
 
-async def test_assign_orders(env: ActivityEnvironment):
-    result = await env.run(assign_orders, AssignOrdersInput())
-    assert "ai-crew-1" in result.assignments
-    assert "ai-crew-2" in result.assignments
-    assert "ai-crew-3" in result.assignments
+async def test_generate_order(env: ActivityEnvironment):
+    result = await env.run(generate_order, GenerateOrderInput(order_number=1))
+    assert result.order_id == "order-1"
+    assert result.hotel  # should have a hotel name
+    assert result.servings > 0
+    assert result.deadline_minutes > 0
 
-    # Verify fleet state was updated
-    c1 = await fleet.get_crew("ai-crew-1")
-    assert c1.status == CrewStatus.EN_ROUTE_PICKUP
-    assert "order-1" in c1.current_orders
+    # Verify order was registered in fleet state
+    order = await fleet.get_order("order-1")
+    assert order.status == OrderStatus.PENDING
+    assert order.hotel == result.hotel
 
 
 async def test_navigate_to_interpolates_position(env: ActivityEnvironment):
+    # Register an order so navigate_to can update its status
+    await env.run(generate_order, GenerateOrderInput(order_number=1))
     inp = NavigateInput(
         crew_id="ai-crew-1",
         order_id="order-1",
@@ -61,8 +64,9 @@ async def test_navigate_to_interpolates_position(env: ActivityEnvironment):
 
 
 async def test_pickup_orders_sets_status(env: ActivityEnvironment):
-    # First assign orders so they exist in fleet state
-    await env.run(assign_orders, AssignOrdersInput())
+    # Generate and register an order first
+    await env.run(generate_order, GenerateOrderInput(order_number=1))
+    await fleet.assign_order_to_crew("ai-crew-1", "order-1")
 
     result = await env.run(
         pickup_orders,
@@ -78,7 +82,8 @@ async def test_pickup_orders_sets_status(env: ActivityEnvironment):
 
 
 async def test_deliver_order_sets_status(env: ActivityEnvironment):
-    await env.run(assign_orders, AssignOrdersInput())
+    await env.run(generate_order, GenerateOrderInput(order_number=1))
+    await fleet.assign_order_to_crew("ai-crew-1", "order-1")
     await env.run(
         pickup_orders,
         PickupInput(crew_id="ai-crew-1", order_ids=["order-1"]),

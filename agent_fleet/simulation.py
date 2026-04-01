@@ -42,6 +42,10 @@ class FleetState:
             "customer_agent": True,
             "resolver": True,
         }
+        # Pending status-change notifications for agent events
+        self._recently_reconnected_agents: set[str] = set()
+        self._recently_reconnected_crews: set[str] = set()
+        self._recently_disconnected_crews: set[str] = set()
         self._init_state()
 
     def _init_state(self) -> None:
@@ -65,6 +69,9 @@ class FleetState:
             "customer_agent": True,
             "resolver": True,
         }
+        self._recently_reconnected_agents.clear()
+        self._recently_reconnected_crews.clear()
+        self._recently_disconnected_crews.clear()
         self._init_state()
 
     # --- Per-crew disconnect / reconnect ---
@@ -76,6 +83,7 @@ class FleetState:
             c.status_before_disconnect = c.status
             c.disconnected = True
             c.status = CrewStatus.DISCONNECTED
+            self._recently_disconnected_crews.add(crew_id)
             self._log(f"[DISCONNECT] AI-Crew {crew_id} lost connection")
 
     async def reconnect_crew(self, crew_id: str) -> None:
@@ -84,6 +92,7 @@ class FleetState:
             c = self.crews[crew_id]
             c.disconnected = False
             c.recovering = True
+            self._recently_reconnected_crews.add(crew_id)
             c.status = c.status_before_disconnect
             self._log(f"[RECONNECT] AI-Crew {crew_id} reconnecting — replaying...")
 
@@ -110,6 +119,7 @@ class FleetState:
         """Bring a specific agent back online."""
         async with self._lock:
             self.agent_health[agent_name] = True
+            self._recently_reconnected_agents.add(agent_name)
             self._log(f"[AGENT ONLINE] {agent_name} reconnected")
 
     async def is_agent_online(self, agent_name: str) -> bool:
@@ -119,6 +129,27 @@ class FleetState:
     async def is_agent_disconnected(self, agent_name: str) -> bool:
         async with self._lock:
             return not self.agent_health.get(agent_name, True)
+
+    async def consume_reconnected_agents(self) -> set[str]:
+        """Return and clear the set of recently-reconnected agents."""
+        async with self._lock:
+            result = set(self._recently_reconnected_agents)
+            self._recently_reconnected_agents.clear()
+            return result
+
+    async def consume_reconnected_crews(self) -> set[str]:
+        """Return and clear the set of recently-reconnected crews."""
+        async with self._lock:
+            result = set(self._recently_reconnected_crews)
+            self._recently_reconnected_crews.clear()
+            return result
+
+    async def consume_disconnected_crews(self) -> set[str]:
+        """Return and clear the set of recently-disconnected crews."""
+        async with self._lock:
+            result = set(self._recently_disconnected_crews)
+            self._recently_disconnected_crews.clear()
+            return result
 
     async def get_agent_health(self) -> dict[str, bool]:
         async with self._lock:

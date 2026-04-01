@@ -919,7 +919,7 @@
     </div>
     <div class="header-divider"></div>
     <div class="header-brand">
-      <img src="https://storage.googleapis.com/gweb-developer-goog-blog-assets/images/ADK-512-color_banner.original.png" alt="Google ADK" title="Google Agent Development Kit" style="height:20px;" />
+      <img src="https://raw.githubusercontent.com/google/adk-docs/main/docs/assets/agent-development-kit.png" alt="Google ADK" title="Google Agent Development Kit" style="height:20px;" />
       <span class="brand-name">Google ADK</span>
     </div>
   </div>
@@ -1323,6 +1323,7 @@ function updateOrders(orders) {
 const AGENT_IDS = ['fleet_agent', 'customer_agent', 'resolver'];
 let prevEventCounts = { fleet_agent: 0, customer_agent: 0, resolver: 0 };
 let prevTotalCount = 0;
+let _pendingChangeDetails = '';
 
 const SNIPPET_LEN = 120;
 
@@ -1491,11 +1492,13 @@ async function submitCustomerChange() {
   let body = { order_id: orderId, change_type: changeType };
   if (changeType === 'address_change') {
     // Demo: move delivery to Cosmopolitan
-    body.new_details = `Customer wants ${orderId} delivery moved to a new location`;
+    body.new_details = `${orderId} rerouted to The Cosmopolitan`;
     body.new_lat = 36.1098;
     body.new_lng = -115.1743;
+    _pendingChangeDetails = 'rerouted to The Cosmopolitan';
   } else {
-    body.new_details = `Customer wants to cancel ${orderId}`;
+    body.new_details = `${orderId} cancelled by customer`;
+    _pendingChangeDetails = 'order cancelled';
   }
 
   const result = await api('customer-change', 'POST', body);
@@ -1515,7 +1518,8 @@ async function approveChange(approved) {
 
   // Update status
   const statusEl = document.getElementById('change-status');
-  statusEl.textContent = approved ? 'Change approved' : 'Change rejected';
+  const approveLabel = _pendingChangeDetails ? `Change approved — ${_pendingChangeDetails}` : 'Change approved';
+  statusEl.textContent = approved ? approveLabel : 'Change rejected';
   statusEl.style.color = approved ? '#22c55e' : '#ef4444';
   document.getElementById('btn-approve').style.display = 'none';
   document.getElementById('btn-reject').style.display = 'none';

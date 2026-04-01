@@ -57,7 +57,16 @@ Orders auto-generate on a timer from Las Vegas Strip venues. AI agents reason ab
 └──────────────────────────────────┘
 ```
 
-**Key integration**: ADK agents run inside a Temporal activity (`reason_about_assignment`). Every LLM call goes through `TemporalModel` (becomes an `invoke_model` activity), every tool call goes through `activity_tool` (becomes a Temporal activity). If the worker restarts mid-reasoning, Temporal replays from history — the agent resumes without re-calling the LLM.
+**How ADK and Temporal map to each other:**
+
+| ADK concept | Temporal concept |
+|-------------|-----------------|
+| **LLM Agent** (`Agent` + `TemporalModel`) | Each Gemini call → `invoke_model` activity, recorded in event log |
+| **Orchestrator Agent** (`SequentialAgent`, `ParallelAgent`) | Pure Python coordination — no Temporal activity, no LLM |
+| **Tool call** (via `activity_tool`) | Each tool invocation → named Temporal activity, retryable + replayable |
+| **Entire agent pipeline** | Runs inside one Temporal activity (`reason_about_assignment`) |
+
+Fleet Agent, Customer Agent, and Resolver are LLM Agents. The outer `order_assignment` pipeline is an Orchestrator Agent — it sequences them with no model of its own. Temporal never sees the orchestration logic; it only sees individual LLM calls and tool calls as discrete activities.
 
 **3-queue separation**: LLM calls are slow (3–5s). Without separate queues, assignment requests could starve navigation activities and cause heartbeat timeouts. The agents queue caps at 5 concurrent; delivery at 20. All three workers share the `FleetState` singleton because they run in the same process.
 

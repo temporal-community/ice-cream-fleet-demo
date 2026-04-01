@@ -37,7 +37,8 @@ Use this framing at the start of the talk before any demo:
 > "Google ADK is an open-source framework for building multi-agent AI systems. You compose agents — each with their own tools and model — into pipelines: run them sequentially, in parallel, or nested. In this demo, a Fleet Agent assesses crew positions and capacity, a Customer Agent evaluates order priority and hotel context, and a Resolver Agent synthesizes their output into a crew assignment."
 
 **Key points to land:**
-- Agents are composable — `SequentialAgent`, `ParallelAgent`, nested agents
+- ADK has two agent types: **LLM Agents** (`Agent` with a model) call Gemini to reason and use tools; **Orchestrator Agents** (`SequentialAgent`, `ParallelAgent`) coordinate sub-agents without calling an LLM themselves
+- In this demo: Fleet Agent, Customer Agent, and Resolver are all LLM Agents — each calls Gemini. The outer pipeline (`create_order_assignment_agent`) is an Orchestrator Agent — it sequences them with no LLM of its own
 - Each agent can use tools (Maps, Search, custom functions)
 - ADK manages the multi-turn reasoning loop — the developer just defines the agents and wires them together
 
@@ -106,6 +107,8 @@ The key design principle: **child workflows give you fault isolation**. Each cre
 ### Where the ADK agents fit
 
 The agents are not workflows — they run inside **activities**. `reason_about_assignment` is a regular Temporal activity that spins up an ADK runner internally. The workflow calls the activity; the activity runs the agents. This is the right layering: the workflow handles durability and coordination, the activity handles the work.
+
+Fleet Agent, Customer Agent, and Resolver are all **LLM Agents** — each is an `Agent` with `model=TemporalModel(DEFAULT_MODEL)`, meaning every Gemini call they make becomes a `invoke_model` Temporal activity. The `create_order_assignment_agent()` function returns an **Orchestrator Agent** (`SequentialAgent`) — it has no model, makes no LLM calls, and has no corresponding Temporal activity. It purely sequences the sub-agents.
 
 The full agent pipeline is composed in [`agent_fleet/agents.py`](agent_fleet/agents.py) using ADK's `ParallelAgent` and `SequentialAgent`:
 

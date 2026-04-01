@@ -547,6 +547,57 @@ async def reason_about_assignment(
     Customer Agent evaluates order priority and urgency.
     Resolver synthesizes and picks the best crew.
     """
+    # --- Status transition notifications (fired once per assignment cycle) ---
+    reconnected_agents = await fleet.consume_reconnected_agents()
+    disconnected_crews = await fleet.consume_disconnected_crews()
+    reconnected_crews = await fleet.consume_reconnected_crews()
+
+    for agent_name in reconnected_agents:
+        label = "Fleet Agent" if agent_name == "fleet_agent" else "Customer Agent"
+        await fleet.publish_agent_event(
+            agent_name,
+            "reconnected",
+            f"{label} is BACK ONLINE — resuming full assessment.",
+            summary=f"{label} back online",
+        )
+        await fleet.publish_agent_event(
+            "resolver",
+            "info",
+            f"{label} has reconnected — full assessment now available.",
+            summary=f"{label} reconnected",
+        )
+        await asyncio.sleep(0.2)
+
+    for crew_id in disconnected_crews:
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "warning",
+            f"ALERT: {crew_id} has DISCONNECTED — removing from candidate pool.",
+            summary=f"{crew_id} disconnected — excluded",
+        )
+        await fleet.publish_agent_event(
+            "resolver",
+            "warning",
+            f"NOTE: {crew_id} is DISCONNECTED — will not be assigned orders.",
+            summary=f"{crew_id} disconnected",
+        )
+        await asyncio.sleep(0.2)
+
+    for crew_id in reconnected_crews:
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "info",
+            f"{crew_id} has RECONNECTED — restored to candidate pool.",
+            summary=f"{crew_id} reconnected — available",
+        )
+        await fleet.publish_agent_event(
+            "resolver",
+            "info",
+            f"{crew_id} is back online — eligible for new assignments.",
+            summary=f"{crew_id} reconnected",
+        )
+        await asyncio.sleep(0.2)
+
     # --- Fleet Agent: find best crew ---
     fleet_agent_offline = await fleet.is_agent_disconnected("fleet_agent")
 

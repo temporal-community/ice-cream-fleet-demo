@@ -16,8 +16,10 @@ Requires a local Temporal dev server (`temporal server start-dev`).
 - **Single process**: FastAPI server + Temporal worker run in the same process (`server.py`).
 - **FleetState singleton** (`simulation.py`): in-memory state shared between worker and server.
   Couriers, orders, cooler status, agent events — all live here.
-- **Workflows** (`workflows.py`): `MeltdownDemoWorkflow` orchestrates; `CourierRouteWorkflow`
-  is a per-courier child workflow. Signal-driven disruption + customer-change handling.
+- **Workflows** (`workflows.py`): `MeltdownDemoWorkflow` orchestrates order generation and
+  multi-agent assignment; `CrewRouteWorkflow` is a per-crew child workflow that continuously
+  receives orders via signal, picks up at the shop, delivers, and loops.
+  Signal-driven disruption + customer-change handling.
 - **Activities** (`activities.py`): discrete retryable units — navigation with heartbeats,
   pickup/deliver, fleet queries, disruption resolution.
 - **ADK agents** (`agents.py`): Fleet Agent + Customer Agent (parallel) → Resolver (sequential).
@@ -31,7 +33,7 @@ Requires a local Temporal dev server (`temporal server start-dev`).
 - Dataclass models for all Temporal payloads (`models.py`)
 - Activities and workflows in separate files
 - Mock mode fallback when `GOOGLE_API_KEY` is not set
-- Deterministic courier assignments in `locations.py`
+- Random order generation from a pool of 10 Las Vegas venues (`locations.py`)
 
 ## Commands
 

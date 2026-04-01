@@ -525,7 +525,7 @@ class MeltdownDemoWorkflow:
                 PublishAgentEventInput(
                     agent_name="resolver",
                     event_type="change_executed",
-                    content=f"Customer change approved and executed for {change.order_id}",
+                    content=f"Customer change approved and executed for {change.order_id}: {change.new_details}",
                 ),
                 task_queue=DELIVERY_QUEUE,
                 start_to_close_timeout=timedelta(seconds=10),
