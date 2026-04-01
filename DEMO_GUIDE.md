@@ -107,6 +107,27 @@ The key design principle: **child workflows give you fault isolation**. Each cre
 
 The agents are not workflows — they run inside **activities**. `reason_about_assignment` is a regular Temporal activity that spins up an ADK runner internally. The workflow calls the activity; the activity runs the agents. This is the right layering: the workflow handles durability and coordination, the activity handles the work.
 
+The full agent pipeline is composed in [`agent_fleet/agents.py`](agent_fleet/agents.py) using ADK's `ParallelAgent` and `SequentialAgent`:
+
+```python
+def create_order_assignment_agent() -> SequentialAgent:
+    parallel_assessment = ParallelAgent(
+        name="assignment_parallel",
+        sub_agents=[
+            create_assignment_fleet_agent(),    # checks positions, capacity, ETAs
+            create_assignment_customer_agent(), # checks priority, deadline, hotel context
+        ],
+    )
+    resolver = create_assignment_resolver()     # synthesizes → calls tool_submit_assignment
+
+    return SequentialAgent(
+        name="order_assignment",
+        sub_agents=[parallel_assessment, resolver],
+    )
+```
+
+Fleet Agent and Customer Agent run in parallel (ADK handles that). Then the Resolver runs sequentially after both complete. The workflow just calls `execute_activity(reason_about_assignment, ...)` — it doesn't know or care about the agent internals.
+
 ### How `TemporalModel` and `activity_tool` work — and why you don't define agent activities explicitly
 
 A common question from engineers: "where are the Temporal activities defined for each agent's LLM call and tool call?" The answer is they aren't — they're injected automatically by two wrappers:
@@ -115,6 +136,28 @@ A common question from engineers: "where are the Temporal activities defined for
 - **`activity_tool(tool_get_fleet_status, ...)`** — when you wrap a tool function this way, every time an agent calls that tool it executes as a Temporal activity. Again, no explicit activity definition needed.
 
 So when Fleet Agent calls Gemini and then calls `tool_get_fleet_status`, both of those are Temporal activities — durable, retryable, and recorded in the event log — purely by inheritance from the wrappers. This is the `temporalio[google-adk]` integration doing its job.
+
+Here's exactly what this looks like in [`agent_fleet/agents.py`](agent_fleet/agents.py):
+
+```python
+# Each agent gets TemporalModel — LLM calls become invoke_model activities automatically
+fleet_agent = Agent(
+    name="assignment_fleet_agent",
+    model=TemporalModel(DEFAULT_MODEL),   # ← this is the only change vs a plain ADK agent
+    tools=[_fleet_status_tool, _route_info_tool, _publish_event_tool],
+    ...
+)
+
+# Each tool is wrapped with activity_tool — tool calls become Temporal activities automatically
+_fleet_status_tool = activity_tool(
+    tool_get_fleet_status,
+    task_queue=AGENTS_QUEUE,
+    start_to_close_timeout=timedelta(seconds=10),
+    retry_policy=_TOOL_RETRY,
+)
+```
+
+No activity `@activity.defn` decorator, no explicit registration — the wrappers handle it.
 
 **The division of responsibility:**
 
@@ -139,6 +182,30 @@ The demo runs three Temporal workers in the same Python process, each on a dedic
 **Why in-process?** All three workers share the `FleetState` singleton in memory. Splitting them into separate processes would require a shared state layer (Redis, Postgres). For a demo, in-process gives you the right separation of concerns without the operational overhead.
 
 The `activity_tool()` wrappers in `agents.py` pass `task_queue=AGENTS_QUEUE` through to `execute_activity()`, so ADK tool calls are automatically routed to the agents worker. The `TemporalModel` wrapper routes LLM calls the same way via the `GoogleAdkPlugin`.
+
+The three workers are set up in [`agent_fleet/worker.py`](agent_fleet/worker.py):
+
+```python
+def create_agents_worker(client: Client) -> Worker:
+    """ADK/LLM activities — rate-limited, GoogleAdkPlugin only registered here."""
+    return Worker(
+        client,
+        task_queue=AGENTS_QUEUE,
+        activities=[reason_about_assignment, register_assignment,
+                    tool_get_fleet_status, tool_get_order_priorities, ...],
+        max_concurrent_activities=5,
+        plugins=[GoogleAdkPlugin()],  # ← only on this worker
+    )
+
+# All three run concurrently in the same process
+async def run_worker():
+    workers = [create_orchestration_worker(client),
+               create_delivery_worker(client),
+               create_agents_worker(client)]
+    await asyncio.gather(*[w.run() for w in workers])
+```
+
+`GoogleAdkPlugin` only needs to be registered on the worker that runs ADK activities — the delivery and orchestration workers don't need it.
 
 ### What this would look like without Temporal
 
