@@ -34,7 +34,7 @@ Use this framing at the start of the talk before any demo:
 
 **The 30-second version:**
 
-> "Google ADK is an open-source framework for building multi-agent AI systems. You compose agents — each with their own tools and model — into pipelines: run them sequentially, in parallel, or nested. In this demo, a Fleet Agent assesses crew positions and capacity, a Customer Agent evaluates order priority and hotel context, and a Resolver Agent synthesizes their output into assignments and recovery plans."
+> "Google ADK is an open-source framework for building multi-agent AI systems. You compose agents — each with their own tools and model — into pipelines: run them sequentially, in parallel, or nested. In this demo, a Fleet Agent assesses crew positions and capacity, a Customer Agent evaluates order priority and hotel context, and a Resolver Agent synthesizes their output into a crew assignment."
 
 **Key points to land:**
 - Agents are composable — `SequentialAgent`, `ParallelAgent`, nested agents
@@ -52,7 +52,7 @@ Use this framing at the start of the talk before any demo:
 **Key points to land:**
 - Workflows are durable — crashes don't lose state
 - Activities are retryable by default — transient failures self-heal
-- Signals let you inject events into a running workflow (disconnect, disruption, change request)
+- Signals let you inject events into a running workflow (crew disconnect, agent disconnect, customer change)
 - The Temporal UI shows the full event history for every workflow run — nothing is a black box
 
 ---
@@ -61,7 +61,7 @@ Use this framing at the start of the talk before any demo:
 
 > "Here's the key insight: in this demo, every LLM call goes through a `TemporalModel` wrapper — it becomes a Temporal activity. Every tool call (Maps, search, fleet status) is also a Temporal activity. That means if the worker crashes mid-agent-reasoning, Temporal doesn't re-call the LLM. It replays the result from the event log. The agent resumes exactly where it left off, with no extra cost and no lost context."
 
-This is the "aha" moment. Return to it whenever you trigger a crash.
+This is the "aha" moment. Return to it when showing crew disconnect recovery or the customer change approval flow.
 
 ---
 

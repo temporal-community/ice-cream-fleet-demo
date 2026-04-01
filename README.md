@@ -6,16 +6,15 @@
 
 A conference demo showing **Google ADK** multi-agent reasoning with **Temporal** durable execution, visualized as an ice cream delivery fleet on the Las Vegas Strip.
 
-Three AI-Crews deliver VIP ice cream orders to hotels on the Strip. When things go wrong — cooler malfunctions, service crashes, customer changes — AI agents coordinate the response while Temporal ensures nothing is lost.
+Orders auto-generate on a timer from Las Vegas Strip venues. AI agents reason about each order — evaluating crew positions, capacity, and priority — then assign it to the best crew. When things go wrong — crew disconnects, agent failures, customer changes — Temporal ensures nothing is lost.
 
 ## What It Demonstrates
 
 | Scenario | What Happens | What It Shows |
 |----------|-------------|---------------|
-| **Crew Disconnect** | Take a single AI-Crew offline mid-delivery | Temporal retries activities indefinitely until reconnect — no work lost |
-| **Agent Disruption** | Take agents offline, then trigger a cooler failure | Agents adapt reasoning with missing peers — Fleet Agent avoids disconnected crews, Resolver compensates for offline agents |
-| **Customer Change** | Submit an address change or cancellation | Human-in-the-loop approval with agent reasoning |
-| **Full System Crash** | Kill the entire worker mid-delivery, restart it | Temporal replays workflow history — AI-Crews resume from exact position |
+| **Agent Disconnect** | Take an agent offline mid-reasoning | ADK degrades gracefully — Resolver compensates with available data. Temporal records every step that completed. Two resilience layers. |
+| **Crew Disconnect** | Take a single AI-Crew offline mid-delivery | Temporal retries the navigation activity indefinitely until reconnect — crew resumes exactly where it stopped |
+| **Customer Change** | Submit an address change or cancellation | Human-in-the-loop: workflow pauses on `wait_condition`, resumes immediately on signal — no polling, no timeout |
 
 ## Architecture
 
@@ -25,28 +24,32 @@ Three AI-Crews deliver VIP ice cream orders to hotels on the Strip. When things 
 │   (workflow state + replay)      │
 └──────────┬───────────────────────┘
            │
-┌──────────▼───────────────────────┐
-│       Temporal Worker            │
-│  ┌─────────────────────────────┐ │
-│  │  MeltdownDemoWorkflow       │ │
-│  │    └─ CrewRouteWF x3     │ │
-│  │        ├─ navigate_to()  ←──┼─┼── heartbeats every step
-│  │        ├─ pickup_orders()   │ │
-│  │        └─ deliver_order()   │ │
-│  └─────────────────────────────┘ │
-│  ┌─────────────────────────────┐ │
-│  │  ADK Agents (via Temporal)  │ │
-│  │  ParallelAgent:             │ │
-│  │  ├─ Fleet Agent             │ │  tool_get_fleet_status
-│  │  │   └─ Google Maps API  ←──┼─┼── tool_get_route_info (activity)
-│  │  ├─ Customer Assessment     │ │  SequentialAgent:
-│  │  │   ├─ Hotel Researcher ←──┼─┼── google_search (built-in)
-│  │  │   └─ Customer Agent      │ │  tool_get_order_priorities
-│  │  └─ Resolver Agent  ←──────┘ │  tool_submit_recovery_plan
-│  │      model=TemporalModel()   │ │
-│  │      tools=activity_tool()   │ │
-│  └─────────────────────────────┘ │
-└──────────────────────────────────┘
+┌──────────▼────────────────────────────────────────────┐
+│  Python process (3 workers, 1 FleetState singleton)   │
+│                                                       │
+│  meltdown-orchestration worker                        │
+│  ├─ MeltdownDemoWorkflow                              │
+│  │    ├─ generate_order()       timer-based, up to 20 │
+│  │    ├─ reason_about_assignment() → AGENTS queue     │
+│  │    └─ CrewRouteWorkflow x3   child workflows       │
+│  └─ CrewRouteWorkflow                                 │
+│       ├─ navigate_to()  → DELIVERY queue (heartbeats) │
+│       ├─ pickup_orders() → DELIVERY queue             │
+│       └─ deliver_order() → DELIVERY queue             │
+│                                                       │
+│  meltdown-delivery worker (max 20 concurrent)         │
+│  └─ navigation, pickup, deliver, customer changes     │
+│                                                       │
+│  meltdown-agents worker (max 5 concurrent)            │
+│  └─ ADK assignment pipeline (via TemporalModel)       │
+│       ParallelAgent:                                  │
+│       ├─ Fleet Agent    tool_get_fleet_status         │
+│       │                 tool_get_route_info (Maps)    │
+│       └─ Customer Agent tool_get_order_priorities     │
+│                         tool_search_hotel_context     │
+│       Assignment Resolver → tool_submit_assignment    │
+│       model=TemporalModel(), tools=activity_tool()    │
+└───────────────────────────────────────────────────────┘
            │
 ┌──────────▼───────────────────────┐
 │     FastAPI + WebSocket          │
@@ -54,16 +57,18 @@ Three AI-Crews deliver VIP ice cream orders to hotels on the Strip. When things 
 └──────────────────────────────────┘
 ```
 
-**Key integration**: ADK agents run inline in the workflow. Every LLM call goes through `TemporalModel` (activity), every tool call goes through `activity_tool` (activity). If the worker crashes mid-reasoning, Temporal replays the activities from history — the agent resumes without re-calling the LLM.
+**Key integration**: ADK agents run inside a Temporal activity (`reason_about_assignment`). Every LLM call goes through `TemporalModel` (becomes an `invoke_model` activity), every tool call goes through `activity_tool` (becomes a Temporal activity). If the worker restarts mid-reasoning, Temporal replays from history — the agent resumes without re-calling the LLM.
 
-### MCP Toolsets
+**3-queue separation**: LLM calls are slow (3–5s). Without separate queues, assignment requests could starve navigation activities and cause heartbeat timeouts. The agents queue caps at 5 concurrent; delivery at 20. All three workers share the `FleetState` singleton because they run in the same process.
 
-| Tool | Agent | Integration | Purpose |
-|------|-------|-------------|---------|
-| **Google Maps Directions** | Fleet Agent | Activity-backed (`activity_tool`) — replay-safe | Driving routes and ETAs for reroute assessment |
-| **Hotel Search** | Hotel Researcher | Activity-backed (`activity_tool`) — replay-safe | Live hotel event context (conferences, VIP bookings) |
+### Activity-backed tools
 
-Both tools are wrapped as Temporal activities — if the worker crashes mid-call, results are replayed from history. Hotel Search calls Google Custom Search API when `GOOGLE_CSE_ID` is set, otherwise returns curated mock data so the demo always shows hotel intelligence. The Hotel Researcher writes `hotel_context` to ADK session state, which the Customer Agent reads to enrich its assessment.
+| Tool | Agent | Purpose |
+|------|-------|---------|
+| **Google Maps Directions** (`tool_get_route_info`) | Fleet Agent | Driving routes and ETAs for crew selection |
+| **Hotel Search** (`tool_search_hotel_context`) | Customer Agent | Live hotel event context — conferences, VIP bookings |
+
+Both are wrapped with `activity_tool()` and routed to the agents queue. Results are recorded in Temporal history — if the worker restarts mid-call, they replay from the log. Hotel Search calls Google Custom Search API when `GOOGLE_CSE_ID` is set, otherwise returns curated mock data.
 
 ## Prerequisites
 
@@ -99,11 +104,10 @@ Navigate to http://localhost:8080
 
 ## Demo Flow
 
-1. **Start Deliveries** — 3 AI-Crews dispatch from Ice Cream Kitchen to MGM Grand, Caesars Palace, Mandalay Bay
-2. **Crew Disconnect** — Select an AI-Crew → disconnect → activities retry until reconnect → seamless resume
-3. **Agent Disruption** — Take agents offline → trigger cooler malfunction → Fleet Agent checks Maps routes (skipping disconnected crews) → Hotel Researcher gathers hotel context → remaining agents reason and compensate for offline peers → recovery plan
-5. **Customer Change** — Submit a change → agent evaluates → approve/reject → order updated
-6. **Full System Crash** — Kill the service mid-flight → red overlay → restart → blue "Replaying..." overlay → AI-Crews resume
+1. **Start Deliveries** — Orders auto-generate every 15s. AI agents reason per-order (Fleet Agent checks positions/capacity, Customer Agent evaluates priority) and assign to the best crew. Crews continuously pick up from Frosty's Ice Cream and deliver.
+2. **Agent Disconnect** — Take an agent offline → Resolver compensates with available data → reconnect → full reasoning resumes
+3. **Crew Disconnect** — Select an AI-Crew → disconnect → activities retry until reconnect → seamless resume
+4. **Customer Change** — Submit a change → workflow pauses waiting for approval → approve/reject → order updated or discarded
 
 ## Key Files
 
@@ -113,10 +117,11 @@ Navigate to http://localhost:8080
 | `agent_fleet/simulation.py` | In-memory fleet state (singleton shared by worker + server) |
 | `agent_fleet/activities.py` | Temporal activities — navigation, delivery, Maps API, agent tools |
 | `agent_fleet/workflows.py` | Temporal workflows — orchestration, signals, queries |
-| `agent_fleet/agents.py` | ADK agent composition — Fleet, Hotel Researcher, Customer, Resolver |
-| `agent_fleet/worker.py` | Temporal worker setup with `GoogleAdkPlugin` |
+| `agent_fleet/agents.py` | ADK agent composition — Fleet, Customer, Assignment Resolver |
+| `agent_fleet/queues.py` | Task queue name constants (orchestration / delivery / agents) |
+| `agent_fleet/worker.py` | Three Temporal workers on three task queues, all in-process |
 | `agent_fleet/server.py` | FastAPI server — APIs, WebSocket, frontend |
-| `agent_fleet/locations.py` | Las Vegas Strip locations and AI-Crew assignments |
+| `agent_fleet/locations.py` | Las Vegas Strip venue pool and random order generation |
 | `frontend/index.html` | Single-file SPA — Leaflet map, agent panels, overlays |
 
 ## Commands
