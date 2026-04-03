@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import math
-import os
 
 import httpx
 from temporalio import activity
 
+from agent_fleet.config import GOOGLE_API_KEY, GOOGLE_CSE_ID, GOOGLE_MAPS_API_KEY
 from agent_fleet.locations import VENUES_BY_HOTEL, generate_random_order
 from agent_fleet.models import (
     CrewStatus,
@@ -253,7 +253,7 @@ async def get_route_polyline(
     Returns a list of {"lat": float, "lng": float} waypoints.
     Falls back to mock corridor waypoints if no API key is set.
     """
-    api_key = os.environ.get("GOOGLE_MAPS_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    api_key = GOOGLE_MAPS_API_KEY
 
     if not api_key:
         activity.logger.info("[NAV] No Maps API key — using mock corridor")
@@ -336,7 +336,7 @@ async def tool_get_route_info(
         destination_lng: Destination longitude
         destination_name: Human-readable name of the destination (e.g. "MGM Grand")
     """
-    api_key = os.environ.get("GOOGLE_MAPS_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    api_key = GOOGLE_MAPS_API_KEY
 
     if not api_key:
         # Mock fallback — deterministic response for demo
@@ -445,8 +445,8 @@ async def _search_hotel_context(hotel_name: str) -> str:
     activity and the mock resolver. Separated so it can be called from within
     another activity (activities can't call other activities via Temporal).
     """
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    search_engine_id = os.environ.get("GOOGLE_CSE_ID")
+    api_key = GOOGLE_API_KEY
+    search_engine_id = GOOGLE_CSE_ID
 
     if api_key and search_engine_id:
         try:

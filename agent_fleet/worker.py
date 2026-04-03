@@ -15,18 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 
 from temporalio.client import Client
+from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
 from temporalio.worker import Worker
-
-try:
-    from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
-
-    _ADK_AVAILABLE = True
-except ImportError:
-    GoogleAdkPlugin = None
-    _ADK_AVAILABLE = False
 
 from agent_fleet.activities import (
     deliver_order,
@@ -46,12 +38,11 @@ from agent_fleet.activities import (
     tool_publish_agent_event,
     tool_search_hotel_context,
 )
+from agent_fleet.config import MOCK_MODE, TEMPORAL_ADDRESS
 from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE, ORCHESTRATION_QUEUE
 from agent_fleet.workflows import CrewRouteWorkflow, MeltdownDemoWorkflow
 
 TASK_QUEUE = ORCHESTRATION_QUEUE  # kept for server.py backwards compat
-TEMPORAL_ADDRESS = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
-MOCK_MODE = not os.environ.get("GOOGLE_API_KEY") or not _ADK_AVAILABLE
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -102,7 +93,7 @@ def create_agents_worker(client: Client) -> Worker:
         ],
         max_concurrent_activities=5,
     )
-    if not MOCK_MODE and GoogleAdkPlugin is not None:
+    if not MOCK_MODE:
         kwargs["plugins"] = [GoogleAdkPlugin()]
     return Worker(client, **kwargs)
 

@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -28,6 +27,7 @@ from temporalio.service import RPCError
 
 load_dotenv()
 
+from agent_fleet.config import GOOGLE_API_KEY, GOOGLE_MAPS_API_KEY
 from agent_fleet.locations import VENUES, WAREHOUSE, WAREHOUSE_LABEL
 from agent_fleet.models import (
     AgentDisconnectInput,
@@ -72,8 +72,8 @@ async def _start_workers() -> None:
         return _run
 
     _worker_tasks = [asyncio.create_task(_make_run(w)()) for w in workers]
-    maps_key = "SET" if os.environ.get("GOOGLE_MAPS_API_KEY") else "NOT SET"
-    gemini_key = "SET" if os.environ.get("GOOGLE_API_KEY") else "NOT SET"
+    maps_key = "SET" if GOOGLE_MAPS_API_KEY else "NOT SET"
+    gemini_key = "SET" if GOOGLE_API_KEY else "NOT SET"
     logger.info(f"Workers started (GOOGLE_MAPS_API_KEY={maps_key}, GOOGLE_API_KEY={gemini_key})")
 
 

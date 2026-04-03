@@ -18,9 +18,10 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    import os
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai.types import Content, Part
 
-    from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE
     from agent_fleet.activities import (
         deliver_order,
         execute_customer_change,
@@ -32,6 +33,8 @@ with workflow.unsafe.imports_passed_through():
         reason_about_assignment,
         register_assignment,
     )
+    from agent_fleet.agents import create_order_assignment_agent
+    from agent_fleet.config import MOCK_MODE as _MOCK_MODE
     from agent_fleet.locations import WAREHOUSE
     from agent_fleet.models import (
         AgentDisconnectInput,
@@ -49,19 +52,7 @@ with workflow.unsafe.imports_passed_through():
         ReasonAboutAssignmentInput,
         ReasonAboutAssignmentOutput,
     )
-
-    _MOCK_MODE = not os.environ.get("GOOGLE_API_KEY")
-
-    try:
-        from google.adk.runners import Runner
-        from google.adk.sessions import InMemorySessionService
-        from google.genai.types import Content, Part
-
-        from agent_fleet.agents import create_order_assignment_agent
-
-        _ADK_IMPORTS_OK = True
-    except ImportError:
-        _ADK_IMPORTS_OK = False
+    from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE
 
 FAST_RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=1),
@@ -319,7 +310,7 @@ class MeltdownDemoWorkflow:
             except Exception as e:
                 results.append(f"{crew_id}: {e}")
 
-        mode = "ADK" if (not _MOCK_MODE and _ADK_IMPORTS_OK) else "mock"
+        mode = "ADK" if not _MOCK_MODE else "mock"
         return f"Meltdown demo complete ({mode}). Results: {results}"
 
     # --- Order generation loop ---
@@ -420,7 +411,7 @@ class MeltdownDemoWorkflow:
             assignment = None
 
             # Try ADK agents first when available
-            if not _MOCK_MODE and _ADK_IMPORTS_OK:
+            if not _MOCK_MODE:
                 assignment = await self._run_adk_assignment(assignment_input)
                 if assignment is not None:
                     # ADK succeeded — register the assignment in fleet state via activity
