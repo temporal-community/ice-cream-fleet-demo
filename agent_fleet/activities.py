@@ -8,8 +8,6 @@ Each activity is a discrete, retryable unit of work. Activities handle:
 - Customer change execution
 """
 
-from __future__ import annotations
-
 import asyncio
 import math
 
