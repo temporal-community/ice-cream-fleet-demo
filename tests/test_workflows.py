@@ -46,12 +46,16 @@ async def env():
 @asynccontextmanager
 async def run_workers(env: WorkflowEnvironment):
     """Start three workers matching production topology, using mock API activities."""
-    from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow
+    from agent_fleet.workflows import (
+        DriverRouteWorkflow,
+        MeltdownDemoWorkflow,
+        OrderGenerationWorkflow,
+    )
 
     workflow_worker = Worker(
         env.client,
         task_queue=WORKFLOWS_QUEUE,
-        workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow],
+        workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow, OrderGenerationWorkflow],
     )
     delivery_worker = Worker(
         env.client,
@@ -138,7 +142,7 @@ async def test_meltdown_demo_completes(env: WorkflowEnvironment):
         result = await env.client.execute_workflow(
             MeltdownDemoWorkflow.run,
             MeltdownDemoInput(escalation_enabled=False, max_orders=2),
-            id="test-meltdown-demo",
+            id="meltdown-demo",
             task_queue=WORKFLOWS_QUEUE,
             execution_timeout=timedelta(minutes=10),
         )
@@ -151,14 +155,14 @@ async def test_meltdown_demo_handles_customer_change(env: WorkflowEnvironment):
     async with run_workers(env):
         handle = await env.client.start_workflow(
             MeltdownDemoWorkflow.run,
-            MeltdownDemoInput(escalation_enabled=False, max_orders=2),
-            id="test-meltdown-demo-customer-changes",
+            MeltdownDemoInput(escalation_enabled=False, max_orders=4),
+            id="meltdown-demo",
             task_queue=WORKFLOWS_QUEUE,
             execution_timeout=timedelta(minutes=10),
         )
 
         # Wait for orders to be generated
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
 
         await handle.signal(
             MeltdownDemoWorkflow.customer_change,
