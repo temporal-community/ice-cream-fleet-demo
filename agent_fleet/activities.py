@@ -215,6 +215,7 @@ async def tool_search_hotel_context(hotel_name: str) -> str:
     Args:
         hotel_name: Name of the hotel (e.g. "MGM Grand", "Caesars Palace", "Mandalay Bay")
     """
+
     query = f"{hotel_name} Las Vegas current events today"
     url = "https://www.googleapis.com/customsearch/v1"
     params = {
