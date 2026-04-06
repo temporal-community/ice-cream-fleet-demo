@@ -350,16 +350,21 @@ class CrewRouteWorkflow:
                 delivered.append(order.order_id)
 
                 # Signal parent workflow that delivery is complete
-                parent = workflow.get_external_workflow_handle(PARENT_WORKFLOW_ID)
-                await parent.signal(
-                    "order_delivered",
-                    OrderDeliveredInput(
-                        crew_id=crew_id,
-                        order_id=order.order_id,
-                        delivery_lat=order.delivery_lat,
-                        delivery_lng=order.delivery_lng,
-                    ),
-                )
+                try:
+                    parent = workflow.get_external_workflow_handle(PARENT_WORKFLOW_ID)
+                    await parent.signal(
+                        "order_delivered",
+                        OrderDeliveredInput(
+                            crew_id=crew_id,
+                            order_id=order.order_id,
+                            delivery_lat=order.delivery_lat,
+                            delivery_lng=order.delivery_lng,
+                        ),
+                    )
+                except Exception:
+                    workflow.logger.warning(
+                        f"Could not signal parent for {order.order_id} delivery"
+                    )
 
         return f"AI-Crew {crew_id} completed {len(delivered)} deliveries: {delivered}"
 
