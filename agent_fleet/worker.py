@@ -41,7 +41,13 @@ from agent_fleet.activities import (
     tool_get_order_priorities,
     tool_publish_agent_event,
 )
-from agent_fleet.config import MOCK_MODE, TEMPORAL_ADDRESS
+from agent_fleet.config import (
+    GOOGLE_API_KEY,
+    GOOGLE_CSE_ID,
+    GOOGLE_MAPS_API_KEY,
+    MOCK_MODE,
+    TEMPORAL_ADDRESS,
+)
 from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE, WORKFLOWS_QUEUE
 from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow
 
@@ -57,33 +63,37 @@ logging.getLogger("temporalio.workflow").setLevel(logging.WARNING)
 def _get_api_activities() -> dict:
     """Return real or mock implementations for API-backed activities.
 
-    In mock mode, mock activities with the same Temporal names are registered.
-    The workflow doesn't know or care which version runs.
+    Each API activity uses its own key check — partial env setups get
+    mock fallbacks for missing services instead of sending wrong credentials.
     """
-    if MOCK_MODE:
+    result = {}
+
+    # Maps activities: need GOOGLE_MAPS_API_KEY explicitly set
+    if GOOGLE_MAPS_API_KEY:
+        from agent_fleet.activities import get_route_polyline, tool_get_route_info
+
+        result["get_route_polyline"] = get_route_polyline
+        result["tool_get_route_info"] = tool_get_route_info
+    else:
         from agent_fleet.mock_activities import (
             mock_get_route_polyline,
             mock_tool_get_route_info,
-            mock_tool_search_hotel_context,
         )
 
-        return {
-            "get_route_polyline": mock_get_route_polyline,
-            "tool_get_route_info": mock_tool_get_route_info,
-            "tool_search_hotel_context": mock_tool_search_hotel_context,
-        }
+        result["get_route_polyline"] = mock_get_route_polyline
+        result["tool_get_route_info"] = mock_tool_get_route_info
+
+    # Search activity: needs both GOOGLE_API_KEY and GOOGLE_CSE_ID
+    if GOOGLE_API_KEY and GOOGLE_CSE_ID:
+        from agent_fleet.activities import tool_search_hotel_context
+
+        result["tool_search_hotel_context"] = tool_search_hotel_context
     else:
-        from agent_fleet.activities import (
-            get_route_polyline,
-            tool_get_route_info,
-            tool_search_hotel_context,
-        )
+        from agent_fleet.mock_activities import mock_tool_search_hotel_context
 
-        return {
-            "get_route_polyline": get_route_polyline,
-            "tool_get_route_info": tool_get_route_info,
-            "tool_search_hotel_context": tool_search_hotel_context,
-        }
+        result["tool_search_hotel_context"] = mock_tool_search_hotel_context
+
+    return result
 
 
 def create_workflow_worker(client: Client) -> Worker:
@@ -153,7 +163,9 @@ def create_agents_worker(client: Client) -> Worker:
 async def create_worker(client: Client) -> list[Worker]:
     """Create all three workers. Returns list for server.py to manage."""
     mode = "MOCK" if MOCK_MODE else "LIVE"
-    logger.info(f"Starting workers ({mode} mode)")
+    maps = "LIVE" if GOOGLE_MAPS_API_KEY else "MOCK"
+    search = "LIVE" if (GOOGLE_API_KEY and GOOGLE_CSE_ID) else "MOCK"
+    logger.info(f"Starting workers (ADK={mode}, Maps={maps}, Search={search})")
     return [
         create_workflow_worker(client),
         create_delivery_worker(client),

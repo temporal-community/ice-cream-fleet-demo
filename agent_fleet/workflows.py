@@ -53,6 +53,7 @@ with workflow.unsafe.imports_passed_through():
         NavigateInput,
         NavigateOutput,
         OrderDeliveredInput,
+        OrderUpdateInput,
         PickupInput,
         PublishAgentEventInput,
         ReasonAboutAssignmentInput,
@@ -127,6 +128,24 @@ class DriverRouteWorkflow:
     async def driver_reconnected(self, inp: DriverDisconnectInput) -> None:
         self._is_disconnected = False
         workflow.logger.info(f"Driver {inp.driver_id} reconnected — resuming")
+
+    @workflow.signal
+    async def update_order(self, inp: OrderUpdateInput) -> None:
+        """Update delivery coordinates for a pending order."""
+        for order in self._pending_orders:
+            if order.order_id == inp.order_id:
+                if inp.new_lat is not None and inp.new_lng is not None:
+                    order.delivery_lat = inp.new_lat
+                    order.delivery_lng = inp.new_lng
+                workflow.logger.info(f"Order {inp.order_id} updated — new destination")
+                return
+        workflow.logger.info(f"Order {inp.order_id} not in pending — may already be in delivery")
+
+    @workflow.signal
+    async def cancel_order(self, inp: OrderUpdateInput) -> None:
+        """Remove an order from the pending queue."""
+        self._pending_orders = [o for o in self._pending_orders if o.order_id != inp.order_id]
+        workflow.logger.info(f"Order {inp.order_id} cancelled — removed from queue")
 
     # --- Queries ---
 
@@ -396,6 +415,7 @@ class MeltdownDemoWorkflow:
         self._driver_orders: dict[str, list[str]] = {}
         self._driver_last_position: dict[str, tuple[float, float]] = {}
         self._orders_generated: int = 0
+        self._route_handles: dict = {}
 
     # --- Signals ---
 
@@ -488,7 +508,7 @@ class MeltdownDemoWorkflow:
             self._driver_last_position[driver_id] = (WAREHOUSE.lat, WAREHOUSE.lng)
 
         # Start 3 empty driver child workflows
-        route_handles = {}
+        self._route_handles = {}
         for i in range(1, 4):
             driver_id = f"ai-driver-{i}"
             handle = await workflow.start_child_workflow(
@@ -497,10 +517,10 @@ class MeltdownDemoWorkflow:
                 id=f"route-{driver_id}",
                 static_summary=f"{driver_id} — delivery loop",
             )
-            route_handles[driver_id] = handle
+            self._route_handles[driver_id] = handle
 
         # Run order generation and signal processing concurrently
-        order_task = asyncio.create_task(self._order_generation_loop(route_handles, inp.max_orders))
+        order_task = asyncio.create_task(self._order_generation_loop(inp.max_orders))
         signal_task = asyncio.create_task(self._signal_loop())
 
         # Wait for order generation to complete (all orders generated + delivered)
@@ -508,7 +528,7 @@ class MeltdownDemoWorkflow:
 
         # Stop all drivers
         self._routes_done = True
-        for handle in route_handles.values():
+        for handle in self._route_handles.values():
             try:
                 await handle.signal(DriverRouteWorkflow.stop)
             except Exception:
@@ -518,7 +538,7 @@ class MeltdownDemoWorkflow:
 
         # Wait for drivers to finish current deliveries
         results = []
-        for driver_id, handle in route_handles.items():
+        for driver_id, handle in self._route_handles.items():
             try:
                 result = await handle
                 results.append(result)
@@ -596,7 +616,6 @@ class MeltdownDemoWorkflow:
 
     async def _order_generation_loop(
         self,
-        route_handles: dict,
         max_orders: int = MAX_ORDERS,
     ) -> None:
         """Generate orders on a timer and assign via multi-agent reasoning."""
@@ -664,8 +683,8 @@ class MeltdownDemoWorkflow:
                 self._driver_orders[driver_id].append(order.order_id)
 
             # Signal the chosen driver
-            if driver_id in route_handles:
-                await route_handles[driver_id].signal(
+            if driver_id in self._route_handles:
+                await self._route_handles[driver_id].signal(
                     DriverRouteWorkflow.add_order,
                     DriverRouteOrder(
                         order_id=order.order_id,
@@ -738,6 +757,29 @@ class MeltdownDemoWorkflow:
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=FAST_RETRY,
             )
+
+            # Signal child workflow with updated coordinates
+            driver_id = self._find_driver_for_order(change.order_id)
+            if driver_id and driver_id in self._route_handles:
+                if change.change_type == "cancel":
+                    await self._route_handles[driver_id].signal(
+                        DriverRouteWorkflow.cancel_order,
+                        OrderUpdateInput(
+                            order_id=change.order_id,
+                            change_type=change.change_type,
+                        ),
+                    )
+                else:
+                    await self._route_handles[driver_id].signal(
+                        DriverRouteWorkflow.update_order,
+                        OrderUpdateInput(
+                            order_id=change.order_id,
+                            change_type=change.change_type,
+                            new_lat=change.new_lat,
+                            new_lng=change.new_lng,
+                        ),
+                    )
+
             await workflow.execute_activity(
                 publish_agent_event,
                 PublishAgentEventInput(
@@ -766,3 +808,10 @@ class MeltdownDemoWorkflow:
                 start_to_close_timeout=timedelta(seconds=10),
                 retry_policy=FAST_RETRY,
             )
+
+    def _find_driver_for_order(self, order_id: str) -> str | None:
+        """Find which driver has a given order."""
+        for driver_id, orders in self._driver_orders.items():
+            if order_id in orders:
+                return driver_id
+        return None

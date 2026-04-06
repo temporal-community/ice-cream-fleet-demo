@@ -285,6 +285,16 @@ class DriverRouteOrder:
 
 
 @dataclass
+class OrderUpdateInput:
+    """Signaled to DriverRouteWorkflow when an order's delivery changes."""
+
+    order_id: str
+    change_type: str  # "address_change" or "cancel"
+    new_lat: float | None = None
+    new_lng: float | None = None
+
+
+@dataclass
 class DriverRouteInput:
     driver_id: str
 
