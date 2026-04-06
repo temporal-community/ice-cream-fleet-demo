@@ -36,8 +36,6 @@ from agent_fleet.models import (
     PickupOutput,
     PublishAgentEventInput,
     PublishAgentEventOutput,
-    ReasonAboutAssignmentInput,
-    ReasonAboutAssignmentOutput,
 )
 from agent_fleet.simulation import fleet
 
@@ -93,8 +91,7 @@ async def get_route_polyline(
     """Fetch route waypoints from Google Maps Directions API (decoded polyline).
 
     Returns a list of {"lat": float, "lng": float} waypoints.
-    Failures propagate to Temporal's retry mechanism — no silent fallback.
-    In mock mode, the worker registers a mock version of this activity instead.
+    Failures propagate to Temporal's retry mechanism.
     """
     origin = f"{origin_lat},{origin_lng}"
     destination = f"{dest_lat},{dest_lng}"
@@ -277,80 +274,6 @@ async def generate_order(inp: GenerateOrderInput) -> GenerateOrderOutput:
 
 
 @activity.defn
-async def reason_about_assignment(
-    inp: ReasonAboutAssignmentInput,
-) -> ReasonAboutAssignmentOutput:
-    """Run ADK agent pipeline to assign an order to the best driver."""
-    from google.adk.runners import Runner
-    from google.adk.sessions import InMemorySessionService
-    from google.genai.types import Content, Part
-
-    from agent_fleet.agents import create_order_assignment_agent
-
-    agent = create_order_assignment_agent()
-
-    session_service = InMemorySessionService()
-    runner = Runner(
-        agent=agent,
-        app_name="meltdown_demo",
-        session_service=session_service,
-    )
-
-    session = await session_service.create_session(
-        app_name="meltdown_demo",
-        user_id="activity",
-    )
-
-    prompt = (
-        f"NEW ORDER — assign to the best driver:\n"
-        f"Order ID: {inp.order_id}\n"
-        f"Hotel: {inp.hotel}\n"
-        f"Event: {inp.event}\n"
-        f"Priority: {inp.priority}\n"
-        f"Servings: {inp.servings}\n"
-        f"Deadline: {inp.deadline_minutes} minutes\n"
-        f"Coordinates: ({inp.delivery_lat}, {inp.delivery_lng})\n\n"
-        f"Assess fleet capacity and customer priority, then the resolver "
-        f"MUST call tool_submit_assignment with the driver_id and reasoning."
-    )
-
-    activity.logger.info(f"Running ADK assignment for {inp.order_id}")
-
-    events_count = 0
-    async for event in runner.run_async(
-        user_id="activity",
-        session_id=session.id,
-        new_message=Content(parts=[Part(text=prompt)]),
-    ):
-        events_count += 1
-
-    updated_session = await session_service.get_session(
-        app_name="meltdown_demo",
-        user_id="activity",
-        session_id=session.id,
-    )
-
-    assignment_dict = (updated_session.state or {}).get("assignment")
-    if not assignment_dict:
-        raise RuntimeError("ADK assignment resolver did not submit an assignment")
-
-    driver_id = assignment_dict["driver_id"]
-    reasoning = assignment_dict.get("reasoning_summary", "ADK assignment")
-
-    activity.logger.info(
-        f"ADK assignment complete: {events_count} events, {inp.order_id} → {driver_id}"
-    )
-
-    # Register in fleet state (UI projection)
-    await fleet.assign_order_to_driver(driver_id, inp.order_id)
-
-    return ReasonAboutAssignmentOutput(
-        driver_id=driver_id,
-        reasoning_summary=reasoning,
-    )
-
-
-@activity.defn
 async def register_assignment(driver_id: str, order_id: str) -> str:
     """Register an ADK-decided assignment in fleet state (UI projection)."""
     await fleet.assign_order_to_driver(driver_id, order_id)
@@ -392,7 +315,7 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
 
     # Build the path to interpolate along
     if inp.waypoints and len(inp.waypoints) >= 2:
-        # Follow waypoint path from Google Maps polyline (or mock corridor)
+        # Follow waypoint path from Google Maps polyline
         path = [(wp["lat"], wp["lng"]) for wp in inp.waypoints]
     else:
         # Straight line fallback

@@ -36,7 +36,6 @@ from agent_fleet.models import (
     MeltdownDemoInput,
 )
 from agent_fleet.queues import WORKFLOWS_QUEUE
-from agent_fleet.worker import create_worker
 from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow
 
 logging.basicConfig(level=logging.INFO)
@@ -65,6 +64,13 @@ async def _start_workers() -> None:
 
     from temporalio.contrib.pydantic import PydanticPayloadConverter
     from temporalio.converter import DataConverter
+
+    if GOOGLE_API_KEY:
+        from agent_fleet.worker import create_worker
+    else:
+        from agent_fleet.mock.worker import create_worker
+
+        logger.info("MOCK MODE: API keys not set, using mock activities")
 
     _temporal_client = await Client.connect(
         TEMPORAL_ADDRESS,

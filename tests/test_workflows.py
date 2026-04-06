@@ -1,6 +1,11 @@
-"""Integration tests for Temporal workflows using time-skipping test environment."""
+"""Integration tests for Temporal workflows using time-skipping test environment.
+
+DriverRouteWorkflow tests use mock activities (no Gemini needed).
+Full MeltdownDemoWorkflow tests require GOOGLE_API_KEY for live ADK.
+"""
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
@@ -17,11 +22,11 @@ from agent_fleet.activities import (
     navigate_to,
     pickup_orders,
     publish_agent_event,
+    register_assignment,
 )
 from agent_fleet.locations import VENUES
-from agent_fleet.mock_activities import (
+from agent_fleet.mock.activities import (
     mock_get_route_polyline,
-    mock_reason_about_assignment,
     mock_tool_get_route_info,
     mock_tool_search_hotel_context,
 )
@@ -42,18 +47,14 @@ async def env():
 
 
 @asynccontextmanager
-async def run_workers(env: WorkflowEnvironment):
-    """Start three workers matching production topology, using mock API activities."""
-    from agent_fleet.workflows import (
-        DriverRouteWorkflow,
-        MeltdownDemoWorkflow,
-        OrderGenerationWorkflow,
-    )
+async def run_delivery_workers(env: WorkflowEnvironment):
+    """Start workers for DriverRouteWorkflow tests (no ADK needed)."""
+    from agent_fleet.workflows import DriverRouteWorkflow, OrderGenerationWorkflow
 
     workflow_worker = Worker(
         env.client,
         task_queue=WORKFLOWS_QUEUE,
-        workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow, OrderGenerationWorkflow],
+        workflows=[DriverRouteWorkflow, OrderGenerationWorkflow],
     )
     delivery_worker = Worker(
         env.client,
@@ -64,23 +65,14 @@ async def run_workers(env: WorkflowEnvironment):
             pickup_orders,
             deliver_order,
             execute_customer_change,
-            mock_get_route_polyline,  # mock — no real Google Maps API in tests
+            mock_get_route_polyline,
             get_fleet_status,
             get_order_priorities,
             publish_agent_event,
         ],
     )
-    agents_worker = Worker(
-        env.client,
-        task_queue=AGENTS_QUEUE,
-        activities=[
-            mock_reason_about_assignment,  # mock — no real Gemini in tests
-            mock_tool_get_route_info,
-            mock_tool_search_hotel_context,
-        ],
-    )
 
-    async with workflow_worker, delivery_worker, agents_worker:
+    async with workflow_worker, delivery_worker:
         yield
 
 
@@ -90,7 +82,6 @@ async def test_driver_route_completes_with_signal(env: WorkflowEnvironment):
 
     venue = VENUES[0]  # MGM Grand
 
-    # Register the order in fleet state so activities can update UI projection
     await fleet.register_order(
         order_id="order-1",
         hotel=venue["hotel"],
@@ -102,7 +93,7 @@ async def test_driver_route_completes_with_signal(env: WorkflowEnvironment):
     )
     await fleet.assign_order_to_driver("ai-driver-1", "order-1")
 
-    async with run_workers(env):
+    async with run_delivery_workers(env):
         handle = await env.client.start_workflow(
             DriverRouteWorkflow.run,
             DriverRouteInput(driver_id="ai-driver-1"),
@@ -110,7 +101,6 @@ async def test_driver_route_completes_with_signal(env: WorkflowEnvironment):
             task_queue=WORKFLOWS_QUEUE,
         )
 
-        # Signal the order
         await handle.signal(
             DriverRouteWorkflow.add_order,
             DriverRouteOrder(
@@ -121,7 +111,6 @@ async def test_driver_route_completes_with_signal(env: WorkflowEnvironment):
             ),
         )
 
-        # Let it process, then stop
         await asyncio.sleep(2)
         await handle.signal(DriverRouteWorkflow.stop)
 
@@ -130,12 +119,65 @@ async def test_driver_route_completes_with_signal(env: WorkflowEnvironment):
         assert "1 deliveries" in result or "completed" in result.lower()
 
 
+@pytest.mark.skipif(
+    not os.environ.get("GOOGLE_API_KEY"),
+    reason="Requires GOOGLE_API_KEY for live ADK agents",
+)
 async def test_meltdown_demo_completes(env: WorkflowEnvironment):
-    """Full demo workflow generates orders, assigns drivers, and completes."""
-    from agent_fleet.workflows import MeltdownDemoWorkflow
+    """Full demo with live ADK agents — only runs when API key is set."""
+    from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
+    from temporalio.contrib.pydantic import PydanticPayloadConverter
+    from temporalio.converter import DataConverter
 
-    async with run_workers(env):
-        result = await env.client.execute_workflow(
+    from agent_fleet.workflows import (
+        DriverRouteWorkflow,
+        MeltdownDemoWorkflow,
+        OrderGenerationWorkflow,
+    )
+
+    # Live mode needs PydanticPayloadConverter for LlmResponse serialization
+    live_client = await env.client.connect(
+        env.client.service_client.config.target_host,
+        data_converter=DataConverter(
+            payload_converter_class=PydanticPayloadConverter,
+        ),
+    )
+
+    workflow_worker = Worker(
+        live_client,
+        task_queue=WORKFLOWS_QUEUE,
+        workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow, OrderGenerationWorkflow],
+        plugins=[GoogleAdkPlugin()],
+    )
+    delivery_worker = Worker(
+        live_client,
+        task_queue=DELIVERY_QUEUE,
+        activities=[
+            generate_order,
+            navigate_to,
+            pickup_orders,
+            deliver_order,
+            execute_customer_change,
+            get_fleet_status,
+            get_order_priorities,
+            publish_agent_event,
+        ],
+        max_concurrent_activities=20,
+    )
+    agents_worker = Worker(
+        live_client,
+        task_queue=AGENTS_QUEUE,
+        activities=[
+            register_assignment,
+            mock_tool_get_route_info,
+            mock_tool_search_hotel_context,
+        ],
+        max_concurrent_activities=5,
+        plugins=[GoogleAdkPlugin()],
+    )
+
+    async with workflow_worker, delivery_worker, agents_worker:
+        result = await live_client.execute_workflow(
             MeltdownDemoWorkflow.run,
             MeltdownDemoInput(escalation_enabled=False, max_orders=2),
             id="meltdown-demo",
@@ -145,11 +187,63 @@ async def test_meltdown_demo_completes(env: WorkflowEnvironment):
         assert "complete" in result.lower()
 
 
+@pytest.mark.skipif(
+    not os.environ.get("GOOGLE_API_KEY"),
+    reason="Requires GOOGLE_API_KEY for live ADK agents",
+)
 async def test_meltdown_demo_handles_customer_change(env: WorkflowEnvironment):
-    from agent_fleet.workflows import MeltdownDemoWorkflow
+    """Customer change with live ADK — only runs when API key is set."""
+    from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
+    from temporalio.contrib.pydantic import PydanticPayloadConverter
+    from temporalio.converter import DataConverter
 
-    async with run_workers(env):
-        handle = await env.client.start_workflow(
+    from agent_fleet.workflows import (
+        DriverRouteWorkflow,
+        MeltdownDemoWorkflow,
+        OrderGenerationWorkflow,
+    )
+
+    live_client = await env.client.connect(
+        env.client.service_client.config.target_host,
+        data_converter=DataConverter(
+            payload_converter_class=PydanticPayloadConverter,
+        ),
+    )
+
+    workflow_worker = Worker(
+        live_client,
+        task_queue=WORKFLOWS_QUEUE,
+        workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow, OrderGenerationWorkflow],
+        plugins=[GoogleAdkPlugin()],
+    )
+    delivery_worker = Worker(
+        live_client,
+        task_queue=DELIVERY_QUEUE,
+        activities=[
+            generate_order,
+            navigate_to,
+            pickup_orders,
+            deliver_order,
+            execute_customer_change,
+            get_fleet_status,
+            get_order_priorities,
+            publish_agent_event,
+        ],
+    )
+    agents_worker = Worker(
+        live_client,
+        task_queue=AGENTS_QUEUE,
+        activities=[
+            register_assignment,
+            mock_tool_get_route_info,
+            mock_tool_search_hotel_context,
+        ],
+        max_concurrent_activities=5,
+        plugins=[GoogleAdkPlugin()],
+    )
+
+    async with workflow_worker, delivery_worker, agents_worker:
+        handle = await live_client.start_workflow(
             MeltdownDemoWorkflow.run,
             MeltdownDemoInput(escalation_enabled=False, max_orders=4),
             id="meltdown-demo",
@@ -157,7 +251,6 @@ async def test_meltdown_demo_handles_customer_change(env: WorkflowEnvironment):
             execution_timeout=timedelta(minutes=10),
         )
 
-        # Wait for orders to be generated
         await asyncio.sleep(5)
 
         await handle.signal(

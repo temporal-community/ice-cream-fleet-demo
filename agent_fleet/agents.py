@@ -204,7 +204,8 @@ def create_assignment_resolver() -> Agent:
 
 def create_order_assignment_agent() -> SequentialAgent:
     """
-    Compose the full order assignment pipeline:
+    Compose the full order assignment pipeline (workflow context).
+    Uses TemporalModel + activity_tool — each LLM and tool call is a Temporal activity.
     1. ParallelAgent: Fleet Agent + Customer Agent assess simultaneously
     2. Assignment Resolver: synthesizes and submits driver assignment
     """

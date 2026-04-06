@@ -34,11 +34,9 @@ with workflow.unsafe.imports_passed_through():
         navigate_to,
         pickup_orders,
         publish_agent_event,
-        reason_about_assignment,
         register_assignment,
     )
     from agent_fleet.agents import create_order_assignment_agent
-    from agent_fleet.config import MOCK_MODE as _MOCK_MODE
     from agent_fleet.locations import WAREHOUSE
     from agent_fleet.models import (
         AgentDisconnectInput,
@@ -428,7 +426,7 @@ class DriverRouteWorkflow:
 class OrderGenerationWorkflow:
     """Generates orders on a timer and signals parent with each new order.
 
-    The parent workflow owns driver state and handles assignment (ADK or mock).
+    The parent workflow owns driver state and handles assignment.
     This workflow is purely a timer + order generator.
     """
 
@@ -689,25 +687,21 @@ class MeltdownDemoWorkflow:
             except Exception as e:
                 results.append(f"{driver_id}: {e}")
 
-        mode = "ADK" if not _MOCK_MODE else "mock"
-        return f"Meltdown demo complete ({mode}). Results: {results}"
+        return f"Meltdown demo complete. Results: {results}"
 
     # --- ADK inline assignment (live mode) ---
 
     async def _run_adk_assignment(
         self, inp: ReasonAboutAssignmentInput
-    ) -> ReasonAboutAssignmentOutput | None:
-        """Run ADK agents inline in the workflow. Returns None on failure.
+    ) -> ReasonAboutAssignmentOutput:
+        """Run ADK agents inline in the workflow.
 
         Each LLM call and tool call is a separate Temporal activity via
         TemporalModel + activity_tool. This gives per-call durability and
-        visibility in the Temporal UI.
+        visibility in the Temporal UI. Failures propagate — Temporal retries.
         """
         workflow.logger.info(f"Running ADK assignment for {inp.order_id}")
         agent = create_order_assignment_agent()
-        if agent is None:
-            workflow.logger.warning("ADK agent creation returned None — check ADK imports")
-            return None
 
         session_service = InMemorySessionService()
         runner = Runner(
@@ -735,16 +729,12 @@ class MeltdownDemoWorkflow:
         )
 
         events_count = 0
-        try:
-            async for event in runner.run_async(
-                user_id="workflow",
-                session_id=session.id,
-                new_message=Content(parts=[Part(text=prompt)]),
-            ):
-                events_count += 1
-        except Exception as e:
-            workflow.logger.error(f"ADK assignment failed ({type(e).__name__}): {e}")
-            return None
+        async for event in runner.run_async(
+            user_id="workflow",
+            session_id=session.id,
+            new_message=Content(parts=[Part(text=prompt)]),
+        ):
+            events_count += 1
 
         updated_session = await session_service.get_session(
             app_name="meltdown_demo",
@@ -754,8 +744,7 @@ class MeltdownDemoWorkflow:
 
         assignment_dict = (updated_session.state or {}).get("assignment")
         if not assignment_dict:
-            workflow.logger.warning("ADK assignment resolver did not submit an assignment")
-            return None
+            raise RuntimeError("ADK assignment resolver did not submit an assignment")
 
         workflow.logger.info(
             f"ADK assignment complete: {events_count} events, driver={assignment_dict['driver_id']}"
@@ -782,7 +771,7 @@ class MeltdownDemoWorkflow:
                 await self._assign_order(order)
 
     async def _assign_order(self, order: OrderAssignmentResult) -> None:
-        """Run assignment (ADK or mock) for a new order and signal the chosen driver."""
+        """Run ADK assignment for a new order and signal the chosen driver."""
         self._orders_generated += 1
 
         # Track order in workflow state
@@ -814,32 +803,15 @@ class MeltdownDemoWorkflow:
             disconnected_agents=list(self._disconnected_agents),
         )
 
-        assignment = None
-
-        # Live mode: run ADK agents inline (per-call Temporal activities)
-        if not _MOCK_MODE:
-            assignment = await self._run_adk_assignment(assignment_input)
-            if assignment is not None:
-                # ADK succeeded — register the assignment in fleet state
-                await workflow.execute_activity(
-                    register_assignment,
-                    args=[assignment.driver_id, order.order_id],
-                    task_queue=AGENTS_QUEUE,
-                    summary=f"Resolver — register {order.order_id} → {assignment.driver_id}",
-                    start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=FAST_RETRY,
-                )
-
-        # Fallback: activity-based assignment (mock mode, or ADK failure)
-        if assignment is None:
-            assignment = await workflow.execute_activity(
-                reason_about_assignment,
-                assignment_input,
-                task_queue=AGENTS_QUEUE,
-                summary=f"Fleet + Customer + Resolver — assign {order.order_id}",
-                start_to_close_timeout=timedelta(seconds=60),
-                retry_policy=FAST_RETRY,
-            )
+        assignment = await self._run_adk_assignment(assignment_input)
+        await workflow.execute_activity(
+            register_assignment,
+            args=[assignment.driver_id, order.order_id],
+            task_queue=AGENTS_QUEUE,
+            summary=f"Resolver — register {order.order_id} → {assignment.driver_id}",
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=FAST_RETRY,
+        )
 
         # Store agent events returned by the assignment activity
         for evt in assignment.agent_events:

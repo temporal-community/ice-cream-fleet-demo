@@ -1,7 +1,7 @@
 """
 Mock activity implementations for the Meltdown demo.
 
-These are registered by the worker when API keys are not set (MOCK_MODE).
+These are registered by the mock worker when API keys are not set.
 They use the same activity names as the real implementations, so workflows
 and ADK agents don't know or care which version is running.
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 
 from temporalio import activity
 
@@ -242,8 +243,6 @@ async def mock_reason_about_assignment(
     FleetState writes are UI projection only.
     Agent events are collected and returned to the workflow via the output.
     """
-    import time
-
     collected_events: list[dict] = []
 
     def _collect_event(agent_name: str, event_type: str, content: str, summary: str = "") -> None:
