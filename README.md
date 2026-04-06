@@ -96,34 +96,33 @@ Fleet and Customer run **in parallel** (`ParallelAgent`), then the Resolver runs
 
 ### Mock mode
 
-When API keys are not set (`MOCK_MODE`), the worker registers mock activity implementations from `mock_activities.py` instead of real ones. Same activity names, deterministic data. The worker startup is the single place that decides real vs mock — no runtime try/except fallbacks inside activities. Real activities let failures propagate to Temporal's retry mechanism.
+Each API-backed activity checks its own key independently at worker startup. Maps activities need `GOOGLE_MAPS_API_KEY`, search needs both `GOOGLE_API_KEY` and `GOOGLE_CSE_ID`. Missing keys get per-service mock fallbacks from `mock_activities.py` — same Temporal activity names, deterministic data. ADK agents (`MOCK_MODE`) key off `GOOGLE_API_KEY` only. The startup log shows per-service status (e.g., `ADK=LIVE, Maps=MOCK, Search=LIVE`). Real activities let failures propagate to Temporal's retry mechanism.
 
 ## Prerequisites
 
 - Python 3.11+
 - [Temporal CLI](https://docs.temporal.io/cli) (`brew install temporal`)
 - Google Gemini API key (for ADK agents; falls back to mock mode without it)
-- Google Maps API key (optional — falls back to mock route data)
+- Google Maps API key (optional, must be a Maps-enabled key — falls back to mock route data)
 - Google Custom Search Engine ID (optional — falls back to curated hotel data)
 
-Without API keys, the demo runs in mock mode: deterministic reasoning, calculated ETAs, and curated hotel context. Mock implementations live in `mock_activities.py` — registered by the worker at startup, not as inline fallbacks.
+Each API key is checked independently. Without `GOOGLE_API_KEY`, ADK agents run in mock mode. Without `GOOGLE_MAPS_API_KEY`, route activities use mock data. Without `GOOGLE_CSE_ID`, hotel search uses curated context. You can run with any combination — the startup log shows which services are live vs mock.
 
 ## Quick Start
 
-### 1. Start Temporal dev server
-
-```bash
-temporal server start-dev
-```
-
-### 2. Install and run
+### 1. Install and configure
 
 ```bash
 pip install -e ".[dev]"
 echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
-echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional
+echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
 echo 'export GOOGLE_CSE_ID="your-cse-id"' >> .env  # optional
-./run.sh
+```
+
+### 2. Run
+
+```bash
+./run.sh    # starts Temporal dev server + FastAPI app
 ```
 
 ### 3. Open the dashboard
@@ -150,6 +149,7 @@ echo 'export GOOGLE_CSE_ID="your-cse-id"' >> .env  # optional
 | `agent_fleet/mock_activities.py` | Mock activity implementations — registered in mock mode, same activity names |
 | `agent_fleet/workflows.py` | Temporal workflows — owns driver state, cancellation scopes, signals, queries |
 | `agent_fleet/agents.py` | ADK agent composition — Fleet, Customer, Assignment Resolver |
+| `agent_fleet/config.py` | Centralized env config — API keys, model name, Temporal address, mock mode |
 | `agent_fleet/queues.py` | Task queue name constants (workflows / delivery / agents) |
 | `agent_fleet/worker.py` | Three Temporal workers — workflow-only, delivery, agents |
 | `agent_fleet/server.py` | FastAPI server — signal-only API, WebSocket, frontend |

@@ -32,7 +32,7 @@ from agent_fleet.activities import (
     tool_publish_agent_event,
     tool_search_hotel_context,
 )
-from agent_fleet.config import GEMINI_MODEL
+from agent_fleet.config import DEFAULT_MODEL
 from agent_fleet.queues import AGENTS_QUEUE
 
 _TOOL_RETRY = RetryPolicy(
@@ -106,7 +106,7 @@ def create_assignment_fleet_agent() -> Agent:
     return Agent(
         name="assignment_fleet_agent",
         model=TemporalModel(
-            GEMINI_MODEL,
+            DEFAULT_MODEL,
             activity_config=ActivityConfig(task_queue=AGENTS_QUEUE),
         ),
         description=(
@@ -141,7 +141,7 @@ def create_assignment_customer_agent() -> Agent:
     return Agent(
         name="assignment_customer_agent",
         model=TemporalModel(
-            GEMINI_MODEL,
+            DEFAULT_MODEL,
             activity_config=ActivityConfig(task_queue=AGENTS_QUEUE),
         ),
         description=(
@@ -175,7 +175,7 @@ def create_assignment_resolver() -> Agent:
     return Agent(
         name="assignment_resolver",
         model=TemporalModel(
-            GEMINI_MODEL,
+            DEFAULT_MODEL,
             activity_config=ActivityConfig(task_queue=AGENTS_QUEUE),
         ),
         description=(
