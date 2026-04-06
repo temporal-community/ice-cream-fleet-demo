@@ -185,7 +185,15 @@ async def create_worker(client: Client) -> list[Worker]:
 async def run_worker() -> None:
     """Connect to Temporal and run all three workers until interrupted."""
     logger.info(f"Connecting to Temporal at {TEMPORAL_ADDRESS}...")
-    client = await Client.connect(TEMPORAL_ADDRESS)
+    from temporalio.contrib.pydantic import PydanticPayloadConverter
+    from temporalio.converter import DataConverter
+
+    client = await Client.connect(
+        TEMPORAL_ADDRESS,
+        data_converter=DataConverter(
+            payload_converter_class=PydanticPayloadConverter,
+        ),
+    )
     workers = await create_worker(client)
     logger.info(f"Workers started on queues: {WORKFLOWS_QUEUE}, {DELIVERY_QUEUE}, {AGENTS_QUEUE}")
     await asyncio.gather(*[w.run() for w in workers])

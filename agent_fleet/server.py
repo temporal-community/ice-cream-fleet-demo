@@ -63,7 +63,15 @@ async def _start_workers() -> None:
         logger.warning("Workers already running")
         return
 
-    _temporal_client = await Client.connect(TEMPORAL_ADDRESS)
+    from temporalio.contrib.pydantic import PydanticPayloadConverter
+    from temporalio.converter import DataConverter
+
+    _temporal_client = await Client.connect(
+        TEMPORAL_ADDRESS,
+        data_converter=DataConverter(
+            payload_converter_class=PydanticPayloadConverter,
+        ),
+    )
     workers = await create_worker(_temporal_client)
 
     def _make_run(w):
