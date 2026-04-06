@@ -35,15 +35,15 @@ from agent_fleet.activities import (
     publish_agent_event,
     reason_about_assignment,
     register_assignment,
-    sync_crew_disconnect,
-    sync_crew_recovery_complete,
+    sync_driver_disconnect,
+    sync_driver_recovery_complete,
     tool_get_fleet_status,
     tool_get_order_priorities,
     tool_publish_agent_event,
 )
 from agent_fleet.config import MOCK_MODE, TEMPORAL_ADDRESS
 from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE, WORKFLOWS_QUEUE
-from agent_fleet.workflows import CrewRouteWorkflow, MeltdownDemoWorkflow
+from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ def create_workflow_worker(client: Client) -> Worker:
     return Worker(
         client,
         task_queue=WORKFLOWS_QUEUE,
-        workflows=[MeltdownDemoWorkflow, CrewRouteWorkflow],
+        workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow],
     )
 
 
@@ -111,8 +111,8 @@ def create_delivery_worker(client: Client) -> Worker:
             get_fleet_status,
             get_order_priorities,
             publish_agent_event,
-            sync_crew_disconnect,
-            sync_crew_recovery_complete,
+            sync_driver_disconnect,
+            sync_driver_recovery_complete,
         ],
         max_concurrent_activities=20,
     )

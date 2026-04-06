@@ -14,9 +14,9 @@ Requires a local Temporal dev server (`temporal server start-dev`).
 ## Architecture
 
 - **Single process**: FastAPI server + 3 Temporal workers run in the same process (`server.py`).
-- **Workflows own state** (`workflows.py`): `MeltdownDemoWorkflow` owns crew positions, order
-  assignments, and disconnect status. Builds `CrewSnapshot`s and passes to activities as inputs.
-  `CrewRouteWorkflow` is a per-crew child workflow with cancellation scopes for disconnect
+- **Workflows own state** (`workflows.py`): `MeltdownDemoWorkflow` owns driver positions, order
+  assignments, and disconnect status. Builds `DriverSnapshot`s and passes to activities as inputs.
+  `DriverRouteWorkflow` is a per-driver child workflow with cancellation scopes for disconnect
   handling. Signals parent on delivery complete.
 - **Activities are pure** (`activities.py`): receive all decision data as inputs, never read
   FleetState for logic. Write to FleetState as UI projection only.

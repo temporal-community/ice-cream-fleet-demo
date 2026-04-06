@@ -952,9 +952,9 @@
   <div class="tab-panel" id="panel-crew">
     <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
     <select id="crew-disconnect-select" class="crew-select">
-      <option value="ai-crew-1">AI-Driver 1</option>
-      <option value="ai-crew-2">AI-Driver 2</option>
-      <option value="ai-crew-3">AI-Driver 3</option>
+      <option value="ai-driver-1">AI-Driver 1</option>
+      <option value="ai-driver-2">AI-Driver 2</option>
+      <option value="ai-driver-3">AI-Driver 3</option>
     </select>
     <button class="btn" onclick="disconnectCrew()">Service Lost</button>
     <button class="btn btn-restart" onclick="reconnectCrew()">Reconnect Crew</button>
@@ -1531,17 +1531,17 @@ async function approveChange(approved) {
   }, 3000);
 }
 
-// --- Per-crew disconnect/reconnect ---
+// --- Per-driver disconnect/reconnect ---
 async function disconnectCrew() {
-  const crewId = document.getElementById('crew-disconnect-select').value;
-  const result = await api('disconnect-crew', 'POST', { crew_id: crewId });
-  console.log('Crew disconnected:', result);
+  const driverId = document.getElementById('crew-disconnect-select').value;
+  const result = await api('disconnect-crew', 'POST', { driver_id: driverId });
+  console.log('Driver disconnected:', result);
 }
 
 async function reconnectCrew() {
-  const crewId = document.getElementById('crew-disconnect-select').value;
-  const result = await api('reconnect-crew', 'POST', { crew_id: crewId });
-  console.log('Crew reconnected:', result);
+  const driverId = document.getElementById('crew-disconnect-select').value;
+  const result = await api('reconnect-crew', 'POST', { driver_id: driverId });
+  console.log('Driver reconnected:', result);
 }
 
 function updateCrewDisconnectBanner(crews) {

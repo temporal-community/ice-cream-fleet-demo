@@ -2,7 +2,7 @@
 FastAPI server for the Meltdown ice cream delivery demo.
 
 Serves the frontend, exposes fleet state via WebSocket, and provides
-API endpoints for demo control (start, reset, crew/agent disconnect,
+API endpoints for demo control (start, reset, driver/agent disconnect,
 customer change, approve/reject).
 
 Run with:
@@ -31,8 +31,8 @@ from agent_fleet.config import GOOGLE_API_KEY, GOOGLE_MAPS_API_KEY, TEMPORAL_ADD
 from agent_fleet.locations import VENUES, WAREHOUSE, WAREHOUSE_LABEL
 from agent_fleet.models import (
     AgentDisconnectInput,
-    CrewDisconnectInput,
     CustomerChangeInput,
+    DriverDisconnectInput,
     MeltdownDemoInput,
 )
 from agent_fleet.queues import WORKFLOWS_QUEUE
@@ -168,48 +168,48 @@ async def reset_demo():
     return {"status": "reset"}
 
 
-# --- Per-crew disconnect/reconnect ---
+# --- Per-driver disconnect/reconnect ---
 
 
-class CrewDisconnectRequest(BaseModel):
-    crew_id: str = "ai-driver-1"
+class DriverDisconnectRequest(BaseModel):
+    driver_id: str = "ai-driver-1"
 
 
 @app.post("/api/disconnect-crew")
-async def disconnect_crew(body: CrewDisconnectRequest):
-    """Disconnect a crew — sends signals only, everything flows through Temporal."""
+async def disconnect_driver(body: DriverDisconnectRequest):
+    """Disconnect a driver — sends signals only, everything flows through Temporal."""
     if _temporal_client is None:
         return {"error": "Temporal client not connected"}
 
-    # Signal both parent orchestrator and the crew's child workflow.
+    # Signal both parent orchestrator and the driver's child workflow.
     # The workflow handles the cancellation and syncs state to FleetState via activities.
     try:
         parent = _temporal_client.get_workflow_handle("meltdown-demo")
         await parent.signal(
-            MeltdownDemoWorkflow.crew_disconnected,
-            CrewDisconnectInput(crew_id=body.crew_id),
+            MeltdownDemoWorkflow.driver_disconnected,
+            DriverDisconnectInput(driver_id=body.driver_id),
         )
     except Exception as e:
         logger.error(f"Failed to signal parent workflow: {e}")
     try:
-        child = _temporal_client.get_workflow_handle(f"route-{body.crew_id}")
+        child = _temporal_client.get_workflow_handle(f"route-{body.driver_id}")
         await child.signal(
-            "crew_disconnected",
-            CrewDisconnectInput(crew_id=body.crew_id),
+            "driver_disconnected",
+            DriverDisconnectInput(driver_id=body.driver_id),
         )
     except Exception as e:
-        logger.error(f"Failed to signal crew workflow: {e}")
+        logger.error(f"Failed to signal driver workflow: {e}")
 
     return {
-        "status": "crew_disconnected",
-        "crew_id": body.crew_id,
-        "message": f"AI-Driver {body.crew_id} disconnected. Other crews continue delivering.",
+        "status": "driver_disconnected",
+        "driver_id": body.driver_id,
+        "message": f"AI-Driver {body.driver_id} disconnected. Other drivers continue delivering.",
     }
 
 
 @app.post("/api/reconnect-crew")
-async def reconnect_crew(body: CrewDisconnectRequest):
-    """Reconnect a crew — sends signals only, everything flows through Temporal."""
+async def reconnect_driver(body: DriverDisconnectRequest):
+    """Reconnect a driver — sends signals only, everything flows through Temporal."""
     if _temporal_client is None:
         return {"error": "Temporal client not connected"}
 
@@ -218,26 +218,26 @@ async def reconnect_crew(body: CrewDisconnectRequest):
     try:
         parent = _temporal_client.get_workflow_handle("meltdown-demo")
         await parent.signal(
-            MeltdownDemoWorkflow.crew_reconnected,
-            CrewDisconnectInput(crew_id=body.crew_id),
+            MeltdownDemoWorkflow.driver_reconnected,
+            DriverDisconnectInput(driver_id=body.driver_id),
         )
     except Exception as e:
         logger.error(f"Failed to signal parent workflow: {e}")
     try:
-        child = _temporal_client.get_workflow_handle(f"route-{body.crew_id}")
+        child = _temporal_client.get_workflow_handle(f"route-{body.driver_id}")
         await child.signal(
-            "crew_reconnected",
-            CrewDisconnectInput(crew_id=body.crew_id),
+            "driver_reconnected",
+            DriverDisconnectInput(driver_id=body.driver_id),
         )
     except Exception as e:
-        logger.error(f"Failed to signal crew workflow: {e}")
+        logger.error(f"Failed to signal driver workflow: {e}")
 
     return {
-        "status": "crew_reconnected",
-        "crew_id": body.crew_id,
+        "status": "driver_reconnected",
+        "driver_id": body.driver_id,
         "message": (
-            f"AI-Driver {body.crew_id} reconnecting. "
-            f"Temporal replaying — crew will resume delivery."
+            f"AI-Driver {body.driver_id} reconnecting. "
+            f"Temporal replaying — driver will resume delivery."
         ),
     }
 

@@ -13,14 +13,14 @@ A conference demo showing **Google ADK** multi-agent reasoning with **Temporal**
   <img src=".github/assets/screenshot.png" alt="Meltdown demo dashboard" width="900">
 </p>
 
-Orders auto-generate on a timer from Las Vegas Strip venues. AI agents reason about each order — evaluating crew positions, capacity, and priority — then assign it to the best crew. When things go wrong — crew disconnects, agent failures, customer changes — Temporal ensures nothing is lost.
+Orders auto-generate on a timer from Las Vegas Strip venues. AI agents reason about each order — evaluating driver positions, capacity, and priority — then assign it to the best driver. When things go wrong — driver disconnects, agent failures, customer changes — Temporal ensures nothing is lost.
 
 ## What It Demonstrates
 
 | Scenario | What Happens | What It Shows |
 |----------|-------------|---------------|
 | **Agent Disconnect** | Take an agent offline mid-reasoning | ADK degrades gracefully — Resolver compensates with available data. Temporal records every step that completed. Two resilience layers. |
-| **Crew Disconnect** | Take a single AI-Driver offline mid-delivery | Workflow cancels the running activity via cancellation scope, waits for reconnect signal, resumes. Everything flows through Temporal — API just sends signals. |
+| **Driver Disconnect** | Take a single AI-Driver offline mid-delivery | Workflow cancels the running activity via cancellation scope, waits for reconnect signal, resumes. Everything flows through Temporal — API just sends signals. |
 | **Customer Change** | Submit an address change or cancellation | Human-in-the-loop: workflow pauses on `wait_condition`, resumes immediately on signal — no polling, no timeout |
 
 ## Architecture
@@ -36,11 +36,11 @@ Orders auto-generate on a timer from Las Vegas Strip venues. AI agents reason ab
 │                                                       │
 │  meltdown-workflows worker (workflows only, no acts)  │
 │  ├─ MeltdownDemoWorkflow  (source of truth for state) │
-│  │    ├─ owns crew positions, order assignments        │
-│  │    ├─ builds CrewSnapshots → passes to activities  │
+│  │    ├─ owns driver positions, order assignments      │
+│  │    ├─ builds DriverSnapshots → passes to activities│
 │  │    ├─ reason_about_assignment() → AGENTS queue     │
-│  │    └─ CrewRouteWorkflow x3   child workflows       │
-│  └─ CrewRouteWorkflow                                 │
+│  │    └─ DriverRouteWorkflow x3   child workflows     │
+│  └─ DriverRouteWorkflow                               │
 │       ├─ owns disconnect state + cancellation scopes  │
 │       ├─ navigate_to()  → DELIVERY queue (heartbeats) │
 │       ├─ pickup_orders() → DELIVERY queue             │
@@ -88,9 +88,9 @@ Fleet Agent, Customer Agent, and Resolver are LLM Agents. The outer `order_assig
 
 | Agent | Reasoning | Tools |
 |-------|-----------|-------|
-| **Fleet Agent** (operational) | Crew positions, capacity (free slots), ETAs to destination, disconnect status — excludes unavailable crews | `tool_get_fleet_status`, `tool_get_route_info` (Google Maps) |
+| **Fleet Agent** (operational) | Driver positions, capacity (free slots), ETAs to destination, disconnect status — excludes unavailable drivers | `tool_get_fleet_status`, `tool_get_route_info` (Google Maps) |
 | **Customer Agent** (priority) | VIP vs standard tier, deadline pressure, hotel events (conferences, galas), servings/guest count | `tool_get_order_priorities`, `tool_search_hotel_context` (Google Search) |
-| **Resolver** (synthesis) | Weighs Fleet + Customer assessments, compensates if either agent is offline, picks final crew | `tool_submit_assignment`, `tool_publish_agent_event` |
+| **Resolver** (synthesis) | Weighs Fleet + Customer assessments, compensates if either agent is offline, picks final driver | `tool_submit_assignment`, `tool_publish_agent_event` |
 
 Fleet and Customer run **in parallel** (`ParallelAgent`), then the Resolver runs **sequentially** after both complete (`SequentialAgent`). All tools are wrapped with `activity_tool()` — each call is a Temporal activity, recorded in the event log. If the worker restarts mid-call, results replay from the log.
 
@@ -135,8 +135,8 @@ echo 'export GOOGLE_CSE_ID="your-cse-id"' >> .env  # optional
 
 ## Demo Flow
 
-1. **Start Deliveries** — Orders auto-generate every 15s. AI agents reason per-order (Fleet Agent checks positions/capacity, Customer Agent evaluates priority) and assign to the best crew. Crews continuously pick up from Frosty's Ice Cream and deliver.
-2. **Crew Disconnect** — Select an AI-Driver → disconnect signal → workflow cancels activity → reconnect signal → seamless resume. Everything flows through Temporal.
+1. **Start Deliveries** — Orders auto-generate every 15s. AI agents reason per-order (Fleet Agent checks positions/capacity, Customer Agent evaluates priority) and assign to the best driver. Drivers continuously pick up from Frosty's Ice Cream and deliver.
+2. **Driver Disconnect** — Select an AI-Driver → disconnect signal → workflow cancels activity → reconnect signal → seamless resume. Everything flows through Temporal.
 3. **Agent Disconnect** — Take an agent offline → Resolver compensates with available data → reconnect → full reasoning resumes
 4. **Customer Change** — Submit a change → workflow pauses waiting for approval → approve/reject → order updated or discarded
 
@@ -144,11 +144,11 @@ echo 'export GOOGLE_CSE_ID="your-cse-id"' >> .env  # optional
 
 | File | What it does |
 |------|-------------|
-| `agent_fleet/models.py` | Dataclass models for all Temporal payloads (incl. `CrewSnapshot`) |
+| `agent_fleet/models.py` | Dataclass models for all Temporal payloads (incl. `DriverSnapshot`) |
 | `agent_fleet/simulation.py` | FleetState — UI projection only (activities write, nothing reads for logic) |
 | `agent_fleet/activities.py` | Temporal activities — navigation, delivery, Maps API, state sync, agent tools |
 | `agent_fleet/mock_activities.py` | Mock activity implementations — registered in mock mode, same activity names |
-| `agent_fleet/workflows.py` | Temporal workflows — owns crew state, cancellation scopes, signals, queries |
+| `agent_fleet/workflows.py` | Temporal workflows — owns driver state, cancellation scopes, signals, queries |
 | `agent_fleet/agents.py` | ADK agent composition — Fleet, Customer, Assignment Resolver |
 | `agent_fleet/queues.py` | Task queue name constants (workflows / delivery / agents) |
 | `agent_fleet/worker.py` | Three Temporal workers — workflow-only, delivery, agents |
