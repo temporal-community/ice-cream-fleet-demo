@@ -1,13 +1,13 @@
 """
-Temporal worker entry point for the Meltdown demo (live mode).
+Temporal worker entry point for the Meltdown demo.
 
-Runs in the same process as the FastAPI server (started from server.py).
+Runs as a separate process from the FastAPI server.
 Three workers on three task queues:
   - meltdown-workflows: workflows only (no activities, dedicated to replay)
   - meltdown-delivery: navigation, pickup, delivery, customer changes
   - meltdown-agents: LLM/ADK tool calls (rate-limited, max 5 concurrent)
 
-Can also be run standalone:
+Run with:
     python -m agent_fleet.worker
 """
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 
 from temporalio.client import Client
 from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
@@ -117,7 +118,23 @@ async def create_worker(client: Client) -> list[Worker]:
 
 
 async def run_worker() -> None:
-    """Connect to Temporal and run all three workers until interrupted."""
+    """Connect to Temporal and run all workers until interrupted."""
+    from agent_fleet.config import GOOGLE_API_KEY, GOOGLE_MAPS_API_KEY
+
+    if GOOGLE_API_KEY:
+        _create = create_worker  # live workers from this module
+        mode = "LIVE"
+    else:
+        from agent_fleet.mock.worker import create_worker as _create
+
+        mode = "MOCK"
+
+    maps_key = "SET" if GOOGLE_MAPS_API_KEY else "NOT SET"
+    gemini_key = "SET" if GOOGLE_API_KEY else "NOT SET"
+    logger.info(
+        f"Worker mode: {mode} (GOOGLE_MAPS_API_KEY={maps_key}, GOOGLE_API_KEY={gemini_key})"
+    )
+
     logger.info(f"Connecting to Temporal at {TEMPORAL_ADDRESS}...")
     from temporalio.contrib.pydantic import PydanticPayloadConverter
     from temporalio.converter import DataConverter
@@ -128,9 +145,25 @@ async def run_worker() -> None:
             payload_converter_class=PydanticPayloadConverter,
         ),
     )
-    workers = await create_worker(client)
+    workers = await _create(client)
     logger.info(f"Workers started on queues: {WORKFLOWS_QUEUE}, {DELIVERY_QUEUE}, {AGENTS_QUEUE}")
-    await asyncio.gather(*[w.run() for w in workers])
+
+    # Graceful shutdown on SIGINT/SIGTERM
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, shutdown_event.set)
+
+    # Run all workers; cancel on shutdown signal
+    tasks = [asyncio.create_task(w.run()) for w in workers]
+    shutdown_task = asyncio.create_task(shutdown_event.wait())
+    done, _ = await asyncio.wait([*tasks, shutdown_task], return_when=asyncio.FIRST_COMPLETED)
+    if shutdown_event.is_set():
+        logger.info("Shutdown signal received, stopping workers...")
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info("Workers stopped.")
 
 
 if __name__ == "__main__":

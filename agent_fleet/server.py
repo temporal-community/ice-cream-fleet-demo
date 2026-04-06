@@ -5,6 +5,8 @@ Serves the frontend, exposes fleet state via WebSocket, and provides
 API endpoints for demo control (start, reset, driver/agent disconnect,
 customer change, approve/reject).
 
+Workers run in a separate process (python -m agent_fleet.worker).
+
 Run with:
     python -m agent_fleet.server
 """
@@ -27,7 +29,7 @@ from temporalio.service import RPCError
 
 load_dotenv()
 
-from agent_fleet.config import GOOGLE_API_KEY, GOOGLE_MAPS_API_KEY, TEMPORAL_ADDRESS
+from agent_fleet.config import TEMPORAL_ADDRESS
 from agent_fleet.locations import VENUES, WAREHOUSE, WAREHOUSE_LABEL
 from agent_fleet.models import (
     AgentDisconnectInput,
@@ -41,73 +43,13 @@ from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Quiet Temporal SDK internals — "Timer started", replay chatter, etc.
-logging.getLogger("temporalio.worker").setLevel(logging.WARNING)
-logging.getLogger("temporalio.activity").setLevel(logging.WARNING)
-logging.getLogger("temporalio.workflow").setLevel(logging.WARNING)
-
 # --- Runtime state ---
 
 _escalation_enabled = False
-_worker_tasks: list[asyncio.Task] = []
 _temporal_client: Client | None = None
 
 
-# --- Worker lifecycle ---
-
-
-async def _start_workers() -> None:
-    global _worker_tasks, _temporal_client
-    if _worker_tasks and any(not t.done() for t in _worker_tasks):
-        logger.warning("Workers already running")
-        return
-
-    from temporalio.contrib.pydantic import PydanticPayloadConverter
-    from temporalio.converter import DataConverter
-
-    if GOOGLE_API_KEY:
-        from agent_fleet.worker import create_worker
-    else:
-        from agent_fleet.mock.worker import create_worker
-
-        logger.info("MOCK MODE: API keys not set, using mock activities")
-
-    _temporal_client = await Client.connect(
-        TEMPORAL_ADDRESS,
-        data_converter=DataConverter(
-            payload_converter_class=PydanticPayloadConverter,
-        ),
-    )
-    workers = await create_worker(_temporal_client)
-
-    def _make_run(w):
-        async def _run():
-            try:
-                await w.run()
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.error(f"Worker error: {e}")
-
-        return _run
-
-    _worker_tasks = [asyncio.create_task(_make_run(w)()) for w in workers]
-    maps_key = "SET" if GOOGLE_MAPS_API_KEY else "NOT SET"
-    gemini_key = "SET" if GOOGLE_API_KEY else "NOT SET"
-    logger.info(f"Workers started (GOOGLE_MAPS_API_KEY={maps_key}, GOOGLE_API_KEY={gemini_key})")
-
-
-async def _stop_workers() -> None:
-    global _worker_tasks
-    running = [t for t in _worker_tasks if not t.done()]
-    if not running:
-        logger.warning("No workers running to stop")
-        return
-    for t in running:
-        t.cancel()
-    await asyncio.gather(*running, return_exceptions=True)
-    _worker_tasks = []
-    logger.info("Workers stopped")
+# --- Workflow management ---
 
 
 async def _cancel_running_workflows() -> None:
@@ -133,9 +75,18 @@ async def _cancel_running_workflows() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await _start_workers()
+    global _temporal_client
+    from temporalio.contrib.pydantic import PydanticPayloadConverter
+    from temporalio.converter import DataConverter
+
+    _temporal_client = await Client.connect(
+        TEMPORAL_ADDRESS,
+        data_converter=DataConverter(
+            payload_converter_class=PydanticPayloadConverter,
+        ),
+    )
+    logger.info(f"Connected to Temporal at {TEMPORAL_ADDRESS}")
     yield
-    await _stop_workers()
 
 
 app = FastAPI(title="Meltdown Ice Cream Delivery", lifespan=lifespan)
