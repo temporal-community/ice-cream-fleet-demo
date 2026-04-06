@@ -299,21 +299,31 @@ class DriverRouteWorkflow:
                 self._current_lat = nav_result.final_lat
                 self._current_lng = nav_result.final_lng
 
-                # Pick up
-                await self._await_reconnect(driver_id)
-                await workflow.execute_activity(
-                    pickup_orders,
-                    PickupInput(
-                        driver_id=driver_id,
-                        order_ids=[order.order_id],
-                        is_driver_disconnected=self._is_disconnected,
-                    ),
-                    task_queue=DELIVERY_QUEUE,
-                    summary=f"{driver_id} — picking up {order.order_id}",
-                    schedule_to_close_timeout=timedelta(minutes=5),
-                    start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=FAST_RETRY,
-                )
+                # Pick up (retry on disconnect between check and activity start)
+                while True:
+                    await self._await_reconnect(driver_id)
+                    try:
+                        await workflow.execute_activity(
+                            pickup_orders,
+                            PickupInput(
+                                driver_id=driver_id,
+                                order_ids=[order.order_id],
+                                is_driver_disconnected=self._is_disconnected,
+                            ),
+                            task_queue=DELIVERY_QUEUE,
+                            summary=f"{driver_id} — picking up {order.order_id}",
+                            schedule_to_close_timeout=timedelta(minutes=5),
+                            start_to_close_timeout=timedelta(seconds=30),
+                            retry_policy=FAST_RETRY,
+                        )
+                        break
+                    except Exception:
+                        if self._is_disconnected:
+                            workflow.logger.info(
+                                f"{driver_id} disconnected during pickup — retrying on reconnect"
+                            )
+                            continue
+                        raise
 
                 self._current_lat, self._current_lng = WAREHOUSE.lat, WAREHOUSE.lng
 
@@ -351,21 +361,31 @@ class DriverRouteWorkflow:
                 self._current_lat = nav_result.final_lat
                 self._current_lng = nav_result.final_lng
 
-                # Deliver
-                await self._await_reconnect(driver_id)
-                await workflow.execute_activity(
-                    deliver_order,
-                    DeliverInput(
-                        driver_id=driver_id,
-                        order_id=order.order_id,
-                        is_driver_disconnected=self._is_disconnected,
-                    ),
-                    task_queue=DELIVERY_QUEUE,
-                    summary=f"{driver_id} — delivered {order.order_id} to {order.hotel}",
-                    schedule_to_close_timeout=timedelta(minutes=5),
-                    start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=FAST_RETRY,
-                )
+                # Deliver (retry on disconnect between check and activity start)
+                while True:
+                    await self._await_reconnect(driver_id)
+                    try:
+                        await workflow.execute_activity(
+                            deliver_order,
+                            DeliverInput(
+                                driver_id=driver_id,
+                                order_id=order.order_id,
+                                is_driver_disconnected=self._is_disconnected,
+                            ),
+                            task_queue=DELIVERY_QUEUE,
+                            summary=f"{driver_id} — delivered {order.order_id} to {order.hotel}",
+                            schedule_to_close_timeout=timedelta(minutes=5),
+                            start_to_close_timeout=timedelta(seconds=30),
+                            retry_policy=FAST_RETRY,
+                        )
+                        break
+                    except Exception:
+                        if self._is_disconnected:
+                            workflow.logger.info(
+                                f"{driver_id} disconnected during delivery — retrying on reconnect"
+                            )
+                            continue
+                        raise
                 delivered.append(order.order_id)
 
                 # Signal parent workflow that delivery is complete
@@ -521,7 +541,7 @@ class MeltdownDemoWorkflow:
 
         # Run order generation and signal processing concurrently
         order_task = asyncio.create_task(self._order_generation_loop(inp.max_orders))
-        signal_task = asyncio.create_task(self._signal_loop())
+        signal_task = asyncio.create_task(self._process_customer_changes())
 
         # Wait for order generation to complete (all orders generated + delivered)
         await order_task
@@ -554,8 +574,10 @@ class MeltdownDemoWorkflow:
         self, inp: ReasonAboutAssignmentInput
     ) -> ReasonAboutAssignmentOutput | None:
         """Run ADK agents for order assignment. Returns None on failure."""
+        workflow.logger.info(f"Running ADK assignment for {inp.order_id}")
         agent = create_order_assignment_agent()
         if agent is None:
+            workflow.logger.warning("ADK agent creation returned None — check ADK imports")
             return None
 
         session_service = InMemorySessionService()
@@ -592,7 +614,7 @@ class MeltdownDemoWorkflow:
             ):
                 events_count += 1
         except Exception as e:
-            workflow.logger.error(f"ADK assignment failed: {e}")
+            workflow.logger.error(f"ADK assignment failed ({type(e).__name__}): {e}")
             return None
 
         updated_session = await session_service.get_session(
@@ -665,9 +687,12 @@ class MeltdownDemoWorkflow:
                         start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=FAST_RETRY,
                     )
+            else:
+                workflow.logger.info(f"MOCK_MODE: skipping ADK for {order.order_id}")
 
             # Fallback to mock if ADK unavailable or failed
             if assignment is None:
+                workflow.logger.info(f"Using mock assignment for {order.order_id}")
                 assignment = await workflow.execute_activity(
                     reason_about_assignment,
                     assignment_input,
@@ -705,7 +730,7 @@ class MeltdownDemoWorkflow:
     def _has_pending_signal(self) -> bool:
         return len(self._pending_changes) > 0
 
-    async def _signal_loop(self) -> None:
+    async def _process_customer_changes(self) -> None:
         while not self._routes_done:
             await workflow.wait_condition(
                 lambda: self._has_pending_signal() or self._routes_done,

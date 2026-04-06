@@ -86,7 +86,7 @@ def decode_polyline(encoded: str) -> list[tuple[float, float]]:
     return points
 
 
-@activity.defn(name="get_route_polyline")
+@activity.defn
 async def get_route_polyline(
     origin_lat: float,
     origin_lng: float,
@@ -126,19 +126,19 @@ async def get_route_polyline(
 # --- Flat-signature tool activities (called by ADK agents via activity_tool) ---
 
 
-@activity.defn(name="tool_get_fleet_status")
+@activity.defn
 async def tool_get_fleet_status() -> str:
     """Check current fleet state: AI-Driver positions, cooler conditions, orders."""
     return await fleet.get_fleet_summary()
 
 
-@activity.defn(name="tool_get_order_priorities")
+@activity.defn
 async def tool_get_order_priorities() -> str:
     """Check order priority details: VIP vs standard, deadlines, servings."""
     return await fleet.get_order_priorities_summary()
 
 
-@activity.defn(name="tool_publish_agent_event")
+@activity.defn
 async def tool_publish_agent_event(
     agent_name: str, event_type: str, content: str, summary: str = ""
 ) -> str:
@@ -147,7 +147,7 @@ async def tool_publish_agent_event(
     return "Event published."
 
 
-@activity.defn(name="tool_get_route_info")
+@activity.defn
 async def tool_get_route_info(
     origin_lat: float,
     origin_lng: float,
@@ -211,7 +211,7 @@ async def tool_get_route_info(
     )
 
 
-@activity.defn(name="tool_search_hotel_context")
+@activity.defn
 async def tool_search_hotel_context(hotel_name: str) -> str:
     """Search for live context about a Las Vegas hotel — current events, VIP bookings, reputation.
 
@@ -250,7 +250,7 @@ async def tool_search_hotel_context(hotel_name: str) -> str:
 # --- Core delivery activities ---
 
 
-@activity.defn(name="generate_order")
+@activity.defn
 async def generate_order(inp: GenerateOrderInput) -> GenerateOrderOutput:
     """Generate a random order from the venue pool and register it in fleet state."""
     order_data = generate_random_order(inp.order_number)
@@ -279,7 +279,7 @@ async def generate_order(inp: GenerateOrderInput) -> GenerateOrderOutput:
     )
 
 
-@activity.defn(name="reason_about_assignment")
+@activity.defn
 async def reason_about_assignment(
     inp: ReasonAboutAssignmentInput,
 ) -> ReasonAboutAssignmentOutput:
@@ -420,14 +420,14 @@ async def reason_about_assignment(
     )
 
 
-@activity.defn(name="register_assignment")
+@activity.defn
 async def register_assignment(driver_id: str, order_id: str) -> str:
     """Register an ADK-decided assignment in fleet state (replay-safe mutation)."""
     await fleet.assign_order_to_driver(driver_id, order_id)
     return f"Assigned {order_id} to {driver_id}"
 
 
-@activity.defn(name="navigate_to")
+@activity.defn
 async def navigate_to(inp: NavigateInput) -> NavigateOutput:
     """
     Simulate AI-Driver navigation by interpolating position over N steps.
@@ -514,7 +514,7 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
     )
 
 
-@activity.defn(name="pickup_orders")
+@activity.defn
 async def pickup_orders(inp: PickupInput) -> PickupOutput:
     """Simulate picking up ice cream orders at the kitchen."""
     if inp.is_driver_disconnected:
@@ -529,7 +529,7 @@ async def pickup_orders(inp: PickupInput) -> PickupOutput:
     return PickupOutput(driver_id=inp.driver_id, success=True)
 
 
-@activity.defn(name="deliver_order")
+@activity.defn
 async def deliver_order(inp: DeliverInput) -> DeliverOutput:
     """Simulate delivering an ice cream order at a hotel."""
     if inp.is_driver_disconnected:
@@ -551,14 +551,14 @@ async def deliver_order(inp: DeliverInput) -> DeliverOutput:
 # --- Agent tool activities (called by ADK agents via activity_tool) ---
 
 
-@activity.defn(name="get_fleet_status")
+@activity.defn
 async def get_fleet_status(inp: GetFleetStatusInput) -> GetFleetStatusOutput:
     """Return fleet status summary for Fleet Agent consumption."""
     summary = await fleet.get_fleet_summary()
     return GetFleetStatusOutput(summary=summary)
 
 
-@activity.defn(name="get_order_priorities")
+@activity.defn
 async def get_order_priorities(
     inp: GetOrderPrioritiesInput,
 ) -> GetOrderPrioritiesOutput:
@@ -567,7 +567,7 @@ async def get_order_priorities(
     return GetOrderPrioritiesOutput(summary=summary)
 
 
-@activity.defn(name="publish_agent_event")
+@activity.defn
 async def publish_agent_event(
     inp: PublishAgentEventInput,
 ) -> PublishAgentEventOutput:
@@ -581,7 +581,7 @@ async def publish_agent_event(
 # --- Workflow-driven state sync activities ---
 
 
-@activity.defn(name="sync_driver_disconnect")
+@activity.defn
 async def sync_driver_disconnect(inp: SyncDriverDisconnectInput) -> None:
     """Sync driver disconnect/reconnect state to FleetState for the frontend.
 
@@ -594,7 +594,7 @@ async def sync_driver_disconnect(inp: SyncDriverDisconnectInput) -> None:
         await fleet.reconnect_driver(inp.driver_id)
 
 
-@activity.defn(name="sync_driver_recovery_complete")
+@activity.defn
 async def sync_driver_recovery_complete(driver_id: str) -> None:
     """Clear the recovery visual indicator after replay completes."""
     await fleet.mark_driver_recovery_complete(driver_id)
@@ -603,7 +603,7 @@ async def sync_driver_recovery_complete(driver_id: str) -> None:
 # --- Customer change activities ---
 
 
-@activity.defn(name="execute_customer_change")
+@activity.defn
 async def execute_customer_change(
     inp: ExecuteCustomerChangeInput,
 ) -> ExecuteCustomerChangeOutput:
