@@ -43,6 +43,11 @@ from agent_fleet.workflows import MeltdownDemoWorkflow
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Quiet Temporal SDK internals — "Timer started", replay chatter, etc.
+logging.getLogger("temporalio.worker").setLevel(logging.WARNING)
+logging.getLogger("temporalio.activity").setLevel(logging.WARNING)
+logging.getLogger("temporalio.workflow").setLevel(logging.WARNING)
+
 # --- Runtime state ---
 
 _escalation_enabled = False

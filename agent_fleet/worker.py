@@ -48,6 +48,11 @@ from agent_fleet.workflows import CrewRouteWorkflow, MeltdownDemoWorkflow
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Quiet Temporal SDK internals — "Timer started", replay chatter, etc.
+logging.getLogger("temporalio.worker").setLevel(logging.WARNING)
+logging.getLogger("temporalio.activity").setLevel(logging.WARNING)
+logging.getLogger("temporalio.workflow").setLevel(logging.WARNING)
+
 
 def _get_api_activities() -> dict:
     """Return real or mock implementations for API-backed activities.
