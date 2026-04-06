@@ -13,9 +13,17 @@ choice visible in the worker setup.
 
 from __future__ import annotations
 
+import asyncio
 import math
 
 from temporalio import activity
+
+from agent_fleet.locations import VENUES_BY_HOTEL
+from agent_fleet.models import (
+    ReasonAboutAssignmentInput,
+    ReasonAboutAssignmentOutput,
+)
+from agent_fleet.simulation import fleet
 
 # --- Strip corridor for mock navigation waypoints ---
 
@@ -216,3 +224,145 @@ async def mock_tool_search_hotel_context(hotel_name: str) -> str:
         if key.lower() in hotel_name.lower() or hotel_name.lower() in key.lower():
             return f"Hotel intelligence for {hotel_name}:\n{context}"
     return f"No specific intelligence available for {hotel_name}."
+
+
+@activity.defn(name="reason_about_assignment")
+async def mock_reason_about_assignment(
+    inp: ReasonAboutAssignmentInput,
+) -> ReasonAboutAssignmentOutput:
+    """
+    Mock multi-agent reasoning to decide which driver should handle a new order.
+
+    Uses deterministic distance math instead of LLM calls.
+    Fleet Agent assesses driver positions and capacity.
+    Customer Agent evaluates order priority and urgency.
+    Resolver synthesizes and picks the best driver.
+
+    All decision inputs come from inp (workflow state) — not from FleetState.
+    FleetState writes are UI projection only.
+    """
+    # --- Fleet Agent: find best driver from workflow-provided snapshots ---
+    fleet_agent_offline = "fleet_agent" in inp.disconnected_agents
+
+    best_driver = None
+    best_dist = float("inf")
+    for driver in inp.driver_snapshots:
+        available = driver.capacity - driver.current_order_count
+        dist = math.sqrt(
+            (driver.lat - inp.delivery_lat) ** 2 + (driver.lng - inp.delivery_lng) ** 2
+        )
+
+        # Skip drivers that can't take orders
+        if driver.is_disconnected or available <= 0:
+            continue
+        if dist < best_dist:
+            best_dist = dist
+            best_driver = driver.driver_id
+    if best_driver is None:
+        # Fallback: pick any driver with capacity even if busy
+        best_driver = "ai-driver-1"
+
+    best_eta = max(2, int(best_dist * 69.0 * 3.5))
+
+    # Map driver IDs to driver labels for display
+    def _driver_label(cid: str) -> str:
+        if cid.startswith("ai-driver-"):
+            return f"Driver {cid.split('-')[-1]}"
+        return cid
+
+    if fleet_agent_offline:
+        # Fleet Agent is offline — publish offline notice and skip its assessment
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "offline",
+            "Fleet Agent offline — resolver using last-known data.",
+            summary="Fleet Agent offline",
+        )
+        await asyncio.sleep(0.2)
+    else:
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "tool_call",
+            f"New order — {inp.hotel}. Scanning fleet.",
+            summary=f"New order — {inp.hotel}",
+        )
+        await asyncio.sleep(0.4)
+
+        await fleet.publish_agent_event(
+            "fleet_agent",
+            "assessment",
+            f"{_driver_label(best_driver)} — closest, ~{best_eta}min ETA.",
+            summary=f"{_driver_label(best_driver)} — ETA {best_eta}min",
+        )
+        await asyncio.sleep(0.3)
+
+    # --- Customer Agent: priority assessment ---
+    customer_agent_offline = "customer_agent" in inp.disconnected_agents
+    urgency = (
+        "URGENT"
+        if inp.deadline_minutes <= 25
+        else ("TIGHT" if inp.deadline_minutes <= 35 else "comfortable")
+    )
+    venue_info = VENUES_BY_HOTEL.get(inp.hotel, {})
+    vip_tier = venue_info.get("vip_tier", "standard")
+
+    if customer_agent_offline:
+        await fleet.publish_agent_event(
+            "customer_agent",
+            "offline",
+            "Customer Agent offline — using order metadata.",
+            summary="Customer Agent offline",
+        )
+        await asyncio.sleep(0.2)
+    else:
+        urgency_note = "Time-critical" if urgency != "comfortable" else "Standard"
+        await fleet.publish_agent_event(
+            "customer_agent",
+            "assessment",
+            f"{inp.priority.upper()} / {vip_tier} — {inp.servings} servings, "
+            f"{inp.deadline_minutes}min deadline. {urgency_note}.",
+            summary=f"{inp.priority.upper()} — {urgency} deadline",
+        )
+        await asyncio.sleep(0.3)
+
+    # --- Resolver: synthesize and assign ---
+    offline_agents = []
+    if fleet_agent_offline:
+        offline_agents.append("Fleet Agent")
+    if customer_agent_offline:
+        offline_agents.append("Customer Agent")
+
+    best_label = _driver_label(best_driver)
+    if offline_agents:
+        offline_list = " and ".join(offline_agents)
+        if fleet_agent_offline and customer_agent_offline:
+            resolver_context = f"Degraded — {offline_list} offline. Best-effort."
+        elif fleet_agent_offline:
+            resolver_context = "Degraded — Fleet Agent offline. Using last-known positions."
+        else:
+            resolver_context = "Degraded — Customer Agent offline. Using order metadata."
+        resolver_summary = f"Assigned {best_label} (degraded)"
+    else:
+        resolver_context = ""
+        resolver_summary = f"Assigned to {best_label}"
+
+    resolver_body = ""
+    if resolver_context:
+        resolver_body += resolver_context + "\n"
+    resolver_body += f"{best_label} -> {inp.hotel}, ETA ~{best_eta}min."
+
+    await fleet.publish_agent_event(
+        "resolver",
+        "plan",
+        resolver_body,
+        summary=resolver_summary,
+    )
+
+    # Register assignment in fleet state (UI projection)
+    await fleet.assign_order_to_driver(best_driver, inp.order_id)
+
+    activity.logger.info(f"Assigned {inp.order_id} ({inp.hotel}) -> {best_driver}")
+    return ReasonAboutAssignmentOutput(
+        driver_id=best_driver,
+        reasoning_summary=f"{_driver_label(best_driver)} — closest, ~{best_eta}min ETA",
+    )

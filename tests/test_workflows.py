@@ -17,14 +17,13 @@ from agent_fleet.activities import (
     navigate_to,
     pickup_orders,
     publish_agent_event,
-    reason_about_assignment,
-    register_assignment,
     sync_driver_disconnect,
     sync_driver_recovery_complete,
 )
 from agent_fleet.locations import VENUES
 from agent_fleet.mock_activities import (
     mock_get_route_polyline,
+    mock_reason_about_assignment,
     mock_tool_get_route_info,
     mock_tool_search_hotel_context,
 )
@@ -75,10 +74,9 @@ async def run_workers(env: WorkflowEnvironment):
         env.client,
         task_queue=AGENTS_QUEUE,
         activities=[
-            reason_about_assignment,
-            register_assignment,
-            mock_tool_get_route_info,  # mock
-            mock_tool_search_hotel_context,  # mock
+            mock_reason_about_assignment,  # mock — no real Gemini in tests
+            mock_tool_get_route_info,
+            mock_tool_search_hotel_context,
         ],
     )
 

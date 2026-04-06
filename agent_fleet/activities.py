@@ -17,7 +17,7 @@ import httpx
 from temporalio import activity
 
 from agent_fleet.config import GOOGLE_API_KEY, GOOGLE_CSE_ID, GOOGLE_MAPS_API_KEY
-from agent_fleet.locations import VENUES_BY_HOTEL, generate_random_order
+from agent_fleet.locations import generate_random_order
 from agent_fleet.models import (
     DeliverInput,
     DeliverOutput,
@@ -283,148 +283,74 @@ async def generate_order(inp: GenerateOrderInput) -> GenerateOrderOutput:
 async def reason_about_assignment(
     inp: ReasonAboutAssignmentInput,
 ) -> ReasonAboutAssignmentOutput:
-    """
-    Multi-agent reasoning to decide which driver should handle a new order.
+    """Run ADK agent pipeline to assign an order to the best driver."""
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai.types import Content, Part
 
-    Fleet Agent assesses driver positions and capacity.
-    Customer Agent evaluates order priority and urgency.
-    Resolver synthesizes and picks the best driver.
+    from agent_fleet.agents import create_order_assignment_agent
 
-    All decision inputs come from inp (workflow state) — not from FleetState.
-    FleetState writes are UI projection only.
-    """
-    # --- Fleet Agent: find best driver from workflow-provided snapshots ---
-    fleet_agent_offline = "fleet_agent" in inp.disconnected_agents
+    agent = create_order_assignment_agent()
 
-    best_driver = None
-    best_dist = float("inf")
-    for driver in inp.driver_snapshots:
-        available = driver.capacity - driver.current_order_count
-        dist = math.sqrt(
-            (driver.lat - inp.delivery_lat) ** 2 + (driver.lng - inp.delivery_lng) ** 2
-        )
-
-        # Skip drivers that can't take orders
-        if driver.is_disconnected or available <= 0:
-            continue
-        if dist < best_dist:
-            best_dist = dist
-            best_driver = driver.driver_id
-    if best_driver is None:
-        # Fallback: pick any driver with capacity even if busy
-        best_driver = "ai-driver-1"
-
-    best_eta = max(2, int(best_dist * 69.0 * 3.5))
-
-    # Map driver IDs to driver labels for display
-    def _driver_label(cid: str) -> str:
-        if cid.startswith("ai-driver-"):
-            return f"Driver {cid.split('-')[-1]}"
-        return cid
-
-    if fleet_agent_offline:
-        # Fleet Agent is offline — publish offline notice and skip its assessment
-        await fleet.publish_agent_event(
-            "fleet_agent",
-            "offline",
-            "Fleet Agent offline — resolver using last-known data.",
-            summary="Fleet Agent offline",
-        )
-        await asyncio.sleep(0.2)
-    else:
-        await fleet.publish_agent_event(
-            "fleet_agent",
-            "tool_call",
-            f"New order — {inp.hotel}. Scanning fleet.",
-            summary=f"New order — {inp.hotel}",
-        )
-        await asyncio.sleep(0.4)
-
-        await fleet.publish_agent_event(
-            "fleet_agent",
-            "assessment",
-            f"{_driver_label(best_driver)} — closest, ~{best_eta}min ETA.",
-            summary=f"{_driver_label(best_driver)} — ETA {best_eta}min",
-        )
-        await asyncio.sleep(0.3)
-
-    # --- Customer Agent: priority assessment ---
-    customer_agent_offline = "customer_agent" in inp.disconnected_agents
-    urgency = (
-        "URGENT"
-        if inp.deadline_minutes <= 25
-        else ("TIGHT" if inp.deadline_minutes <= 35 else "comfortable")
-    )
-    venue_info = VENUES_BY_HOTEL.get(inp.hotel, {})
-    vip_tier = venue_info.get("vip_tier", "standard")
-
-    if customer_agent_offline:
-        await fleet.publish_agent_event(
-            "customer_agent",
-            "offline",
-            "Customer Agent offline — using order metadata.",
-            summary="Customer Agent offline",
-        )
-        await asyncio.sleep(0.2)
-    else:
-        urgency_note = "Time-critical" if urgency != "comfortable" else "Standard"
-        await fleet.publish_agent_event(
-            "customer_agent",
-            "assessment",
-            f"{inp.priority.upper()} / {vip_tier} — {inp.servings} servings, "
-            f"{inp.deadline_minutes}min deadline. {urgency_note}.",
-            summary=f"{inp.priority.upper()} — {urgency} deadline",
-        )
-        await asyncio.sleep(0.3)
-
-    # --- Resolver: synthesize and assign ---
-    offline_agents = []
-    if fleet_agent_offline:
-        offline_agents.append("Fleet Agent")
-    if customer_agent_offline:
-        offline_agents.append("Customer Agent")
-
-    best_label = _driver_label(best_driver)
-    if offline_agents:
-        offline_list = " and ".join(offline_agents)
-        if fleet_agent_offline and customer_agent_offline:
-            resolver_context = f"Degraded — {offline_list} offline. Best-effort."
-        elif fleet_agent_offline:
-            resolver_context = "Degraded — Fleet Agent offline. Using last-known positions."
-        else:
-            resolver_context = "Degraded — Customer Agent offline. Using order metadata."
-        resolver_summary = f"Assigned {best_label} (degraded)"
-    else:
-        resolver_context = ""
-        resolver_summary = f"Assigned to {best_label}"
-
-    resolver_body = ""
-    if resolver_context:
-        resolver_body += resolver_context + "\n"
-    resolver_body += f"{best_label} -> {inp.hotel}, ETA ~{best_eta}min."
-
-    await fleet.publish_agent_event(
-        "resolver",
-        "plan",
-        resolver_body,
-        summary=resolver_summary,
+    session_service = InMemorySessionService()
+    runner = Runner(
+        agent=agent,
+        app_name="meltdown_demo",
+        session_service=session_service,
     )
 
-    # Register assignment in fleet state (UI projection)
-    await fleet.assign_order_to_driver(best_driver, inp.order_id)
+    session = await session_service.create_session(
+        app_name="meltdown_demo",
+        user_id="activity",
+    )
 
-    activity.logger.info(f"Assigned {inp.order_id} ({inp.hotel}) -> {best_driver}")
+    prompt = (
+        f"NEW ORDER — assign to the best driver:\n"
+        f"Order ID: {inp.order_id}\n"
+        f"Hotel: {inp.hotel}\n"
+        f"Event: {inp.event}\n"
+        f"Priority: {inp.priority}\n"
+        f"Servings: {inp.servings}\n"
+        f"Deadline: {inp.deadline_minutes} minutes\n"
+        f"Coordinates: ({inp.delivery_lat}, {inp.delivery_lng})\n\n"
+        f"Assess fleet capacity and customer priority, then the resolver "
+        f"MUST call tool_submit_assignment with the driver_id and reasoning."
+    )
+
+    activity.logger.info(f"Running ADK assignment for {inp.order_id}")
+
+    events_count = 0
+    async for event in runner.run_async(
+        user_id="activity",
+        session_id=session.id,
+        new_message=Content(parts=[Part(text=prompt)]),
+    ):
+        events_count += 1
+
+    updated_session = await session_service.get_session(
+        app_name="meltdown_demo",
+        user_id="activity",
+        session_id=session.id,
+    )
+
+    assignment_dict = (updated_session.state or {}).get("assignment")
+    if not assignment_dict:
+        raise RuntimeError("ADK assignment resolver did not submit an assignment")
+
+    driver_id = assignment_dict["driver_id"]
+    reasoning = assignment_dict.get("reasoning_summary", "ADK assignment")
+
+    activity.logger.info(
+        f"ADK assignment complete: {events_count} events, {inp.order_id} → {driver_id}"
+    )
+
+    # Register in fleet state (UI projection)
+    await fleet.assign_order_to_driver(driver_id, inp.order_id)
+
     return ReasonAboutAssignmentOutput(
-        driver_id=best_driver,
-        reasoning_summary=f"{_driver_label(best_driver)} — closest, ~{best_eta}min ETA",
+        driver_id=driver_id,
+        reasoning_summary=reasoning,
     )
-
-
-@activity.defn
-async def register_assignment(driver_id: str, order_id: str) -> str:
-    """Register an ADK-decided assignment in fleet state (replay-safe mutation)."""
-    await fleet.assign_order_to_driver(driver_id, order_id)
-    return f"Assigned {order_id} to {driver_id}"
 
 
 @activity.defn
