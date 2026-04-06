@@ -48,7 +48,7 @@ from agent_fleet.config import (
     TEMPORAL_ADDRESS,
 )
 from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE, WORKFLOWS_QUEUE
-from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow
+from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow, OrderGenerationWorkflow
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ def create_workflow_worker(client: Client) -> Worker:
     """
     kwargs: dict = dict(
         task_queue=WORKFLOWS_QUEUE,
-        workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow],
+        workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow, OrderGenerationWorkflow],
     )
     if not MOCK_MODE:
         from temporalio.contrib.google_adk_agents import GoogleAdkPlugin

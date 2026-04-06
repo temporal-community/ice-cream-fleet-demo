@@ -1,9 +1,12 @@
 """
 Temporal workflows for the Meltdown ice cream delivery demo.
 
-MeltdownDemoWorkflow — main orchestrator. Starts 3 driver child workflows,
-generates orders on a timer, runs multi-agent reasoning per order, and
-signals the chosen driver. Handles customer-change signals concurrently.
+MeltdownDemoWorkflow — main orchestrator. Starts driver and order-generation
+child workflows. Owns driver state, runs multi-agent assignment per order,
+and signals the chosen driver. Handles customer-change signals concurrently.
+
+OrderGenerationWorkflow — child workflow that generates orders on a timer
+and signals the parent with each new order for assignment.
 
 DriverRouteWorkflow — per-driver continuous delivery loop (child workflow).
 Waits for orders via signal, picks up at the shop, delivers, repeats.
@@ -52,7 +55,9 @@ with workflow.unsafe.imports_passed_through():
         MeltdownDemoInput,
         NavigateInput,
         NavigateOutput,
+        OrderAssignmentResult,
         OrderDeliveredInput,
+        OrderGenerationInput,
         OrderUpdateInput,
         PickupInput,
         PublishAgentEventInput,
@@ -408,6 +413,73 @@ class DriverRouteWorkflow:
         return f"AI-Driver {driver_id} completed {len(delivered)} deliveries: {delivered}"
 
 
+# --- Order generation child workflow ---
+
+
+@workflow.defn
+class OrderGenerationWorkflow:
+    """Generates orders on a timer and signals parent with each new order.
+
+    The parent workflow owns driver state and handles assignment (ADK or mock).
+    This workflow is purely a timer + order generator.
+    """
+
+    def __init__(self) -> None:
+        self._stop = False
+
+    @workflow.signal
+    async def stop(self) -> None:
+        self._stop = True
+
+    @workflow.query
+    def get_status(self) -> dict:
+        return {"stop": self._stop}
+
+    @workflow.run
+    async def run(self, inp: OrderGenerationInput) -> str:
+        for order_num in range(1, inp.max_orders + 1):
+            if self._stop:
+                break
+
+            # Generate a new order
+            order = await workflow.execute_activity(
+                generate_order,
+                GenerateOrderInput(order_number=order_num),
+                task_queue=DELIVERY_QUEUE,
+                summary=f"Generate order #{order_num}",
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=FAST_RETRY,
+            )
+
+            # Signal parent with the new order
+            parent = workflow.get_external_workflow_handle(PARENT_WORKFLOW_ID)
+            await parent.signal(
+                "new_order",
+                OrderAssignmentResult(
+                    order_id=order.order_id,
+                    hotel=order.hotel,
+                    delivery_lat=order.delivery_lat,
+                    delivery_lng=order.delivery_lng,
+                    driver_id="",  # Not yet assigned — parent handles assignment
+                    reasoning_summary="",
+                    priority=order.priority,
+                    servings=order.servings,
+                    deadline_minutes=order.deadline_minutes,
+                    event=order.event,
+                ),
+            )
+
+            workflow.logger.info(
+                f"Order {order_num}/{inp.max_orders}: {order.order_id} signaled to parent"
+            )
+
+            # Wait before next order
+            if order_num < inp.max_orders:
+                await workflow.sleep(timedelta(seconds=inp.order_interval_seconds))
+
+        return f"Order generation complete — {inp.max_orders} orders generated"
+
+
 # --- Main demo orchestrator ---
 
 
@@ -428,6 +500,7 @@ class MeltdownDemoWorkflow:
     def __init__(self) -> None:
         self._pending_changes: list[CustomerChangeInput] = []
         self._pending_approvals: list[bool] = []
+        self._pending_new_orders: list[OrderAssignmentResult] = []
         self._routes_done: bool = False
         self._disconnected_drivers: set[str] = set()
         self._disconnected_agents: set[str] = set()
@@ -436,6 +509,7 @@ class MeltdownDemoWorkflow:
         self._driver_last_position: dict[str, tuple[float, float]] = {}
         self._orders_generated: int = 0
         self._route_handles: dict = {}
+        self._order_gen_handle: workflow.ChildWorkflowHandle | None = None
 
     # --- Signals ---
 
@@ -476,6 +550,11 @@ class MeltdownDemoWorkflow:
                 self._driver_orders[driver_id].remove(inp.order_id)
         self._driver_last_position[driver_id] = (inp.delivery_lat, inp.delivery_lng)
         workflow.logger.info(f"Order {inp.order_id} delivered by {driver_id}")
+
+    @workflow.signal
+    async def new_order(self, order: OrderAssignmentResult) -> None:
+        """Signaled by OrderGenerationWorkflow with each new order to assign."""
+        self._pending_new_orders.append(order)
 
     # --- Queries ---
 
@@ -527,7 +606,7 @@ class MeltdownDemoWorkflow:
             self._driver_orders[driver_id] = []
             self._driver_last_position[driver_id] = (WAREHOUSE.lat, WAREHOUSE.lng)
 
-        # Start 3 empty driver child workflows
+        # Start 3 driver child workflows
         self._route_handles = {}
         for i in range(1, 4):
             driver_id = f"ai-driver-{i}"
@@ -539,14 +618,30 @@ class MeltdownDemoWorkflow:
             )
             self._route_handles[driver_id] = handle
 
-        # Run order generation and signal processing concurrently
-        order_task = asyncio.create_task(self._order_generation_loop(inp.max_orders))
-        signal_task = asyncio.create_task(self._process_customer_changes())
+        # Start order generation as a child workflow
+        self._order_gen_handle = await workflow.start_child_workflow(
+            OrderGenerationWorkflow.run,
+            OrderGenerationInput(
+                max_orders=inp.max_orders,
+                order_interval_seconds=ORDER_INTERVAL_SECONDS,
+            ),
+            id="order-generation",
+            static_summary="Order generation + agent assignment",
+        )
 
-        # Wait for order generation to complete (all orders generated + delivered)
-        await order_task
+        # Process new orders and customer changes concurrently
+        order_task = asyncio.create_task(self._process_new_orders())
+        change_task = asyncio.create_task(self._process_customer_changes())
 
-        # Stop all drivers
+        # Wait for order generation to complete
+        await self._order_gen_handle
+
+        # Drain any remaining orders that arrived via signal before stopping
+        while self._pending_new_orders:
+            order = self._pending_new_orders.pop(0)
+            await self._assign_order(order)
+
+        # Stop all drivers and concurrent loops
         self._routes_done = True
         for handle in self._route_handles.values():
             try:
@@ -554,7 +649,8 @@ class MeltdownDemoWorkflow:
             except Exception:
                 pass
 
-        await signal_task
+        await change_task
+        await order_task
 
         # Wait for drivers to finish current deliveries
         results = []
@@ -641,93 +737,87 @@ class MeltdownDemoWorkflow:
             reasoning_summary=assignment_dict.get("reasoning_summary", "ADK assignment"),
         )
 
-    # --- Order generation loop ---
+    # --- New order processing (triggered by signals from OrderGenerationWorkflow) ---
 
-    async def _order_generation_loop(
-        self,
-        max_orders: int = MAX_ORDERS,
-    ) -> None:
-        """Generate orders on a timer and assign via multi-agent reasoning."""
-        for order_num in range(1, max_orders + 1):
+    async def _process_new_orders(self) -> None:
+        """Process new orders as they arrive via signal from OrderGenerationWorkflow."""
+        while not self._routes_done:
+            await workflow.wait_condition(
+                lambda: len(self._pending_new_orders) > 0 or self._routes_done,
+            )
+
             if self._routes_done:
                 break
 
-            # Generate a new order
-            order = await workflow.execute_activity(
-                generate_order,
-                GenerateOrderInput(order_number=order_num),
-                task_queue=DELIVERY_QUEUE,
-                summary=f"Generate order #{order_num}",
-                start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=FAST_RETRY,
-            )
-            self._orders_generated = order_num
+            while self._pending_new_orders:
+                order = self._pending_new_orders.pop(0)
+                await self._assign_order(order)
 
-            # Build driver snapshots from workflow state — passed to activity as input
-            driver_snapshots = self._build_driver_snapshots()
+    async def _assign_order(self, order: OrderAssignmentResult) -> None:
+        """Run assignment (ADK or mock) for a new order and signal the chosen driver."""
+        self._orders_generated += 1
 
-            assignment_input = ReasonAboutAssignmentInput(
-                order_id=order.order_id,
-                hotel=order.hotel,
-                delivery_lat=order.delivery_lat,
-                delivery_lng=order.delivery_lng,
-                priority=order.priority,
-                servings=order.servings,
-                deadline_minutes=order.deadline_minutes,
-                event=order.event,
-                driver_snapshots=driver_snapshots,
-                disconnected_agents=list(self._disconnected_agents),
-            )
+        # Build driver snapshots from workflow state — passed to activity as input
+        driver_snapshots = self._build_driver_snapshots()
 
-            assignment = None
+        assignment_input = ReasonAboutAssignmentInput(
+            order_id=order.order_id,
+            hotel=order.hotel,
+            delivery_lat=order.delivery_lat,
+            delivery_lng=order.delivery_lng,
+            priority=order.priority,
+            servings=order.servings,
+            deadline_minutes=order.deadline_minutes,
+            event=order.event,
+            driver_snapshots=driver_snapshots,
+            disconnected_agents=list(self._disconnected_agents),
+        )
 
-            # Live mode: run ADK agents inline (per-call Temporal activities)
-            if not _MOCK_MODE:
-                assignment = await self._run_adk_assignment(assignment_input)
-                if assignment is not None:
-                    # ADK succeeded — register the assignment in fleet state
-                    await workflow.execute_activity(
-                        register_assignment,
-                        args=[assignment.driver_id, order.order_id],
-                        task_queue=AGENTS_QUEUE,
-                        summary=(f"Resolver — register {order.order_id} → {assignment.driver_id}"),
-                        start_to_close_timeout=timedelta(seconds=30),
-                        retry_policy=FAST_RETRY,
-                    )
+        assignment = None
 
-            # Fallback: activity-based assignment (mock mode, or ADK failure)
-            if assignment is None:
-                assignment = await workflow.execute_activity(
-                    reason_about_assignment,
-                    assignment_input,
+        # Live mode: run ADK agents inline (per-call Temporal activities)
+        if not _MOCK_MODE:
+            assignment = await self._run_adk_assignment(assignment_input)
+            if assignment is not None:
+                # ADK succeeded — register the assignment in fleet state
+                await workflow.execute_activity(
+                    register_assignment,
+                    args=[assignment.driver_id, order.order_id],
                     task_queue=AGENTS_QUEUE,
-                    summary=f"Fleet + Customer + Resolver — assign {order.order_id}",
-                    start_to_close_timeout=timedelta(seconds=60),
+                    summary=f"Resolver — register {order.order_id} → {assignment.driver_id}",
+                    start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
                 )
 
-            # Update workflow-owned driver state
-            driver_id = assignment.driver_id
-            if driver_id in self._driver_orders:
-                self._driver_orders[driver_id].append(order.order_id)
+        # Fallback: activity-based assignment (mock mode, or ADK failure)
+        if assignment is None:
+            assignment = await workflow.execute_activity(
+                reason_about_assignment,
+                assignment_input,
+                task_queue=AGENTS_QUEUE,
+                summary=f"Fleet + Customer + Resolver — assign {order.order_id}",
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=FAST_RETRY,
+            )
 
-            # Signal the chosen driver
-            if driver_id in self._route_handles:
-                await self._route_handles[driver_id].signal(
-                    DriverRouteWorkflow.add_order,
-                    DriverRouteOrder(
-                        order_id=order.order_id,
-                        hotel=order.hotel,
-                        delivery_lat=order.delivery_lat,
-                        delivery_lng=order.delivery_lng,
-                    ),
-                )
+        # Update workflow-owned driver state
+        driver_id = assignment.driver_id
+        if driver_id in self._driver_orders:
+            self._driver_orders[driver_id].append(order.order_id)
 
-            workflow.logger.info(f"Order {order_num}/{MAX_ORDERS}: {order.order_id} -> {driver_id}")
+        # Signal the chosen driver
+        if driver_id in self._route_handles:
+            await self._route_handles[driver_id].signal(
+                DriverRouteWorkflow.add_order,
+                DriverRouteOrder(
+                    order_id=order.order_id,
+                    hotel=order.hotel,
+                    delivery_lat=order.delivery_lat,
+                    delivery_lng=order.delivery_lng,
+                ),
+            )
 
-            # Wait before next order
-            if order_num < max_orders:
-                await workflow.sleep(timedelta(seconds=ORDER_INTERVAL_SECONDS))
+        workflow.logger.info(f"Order {self._orders_generated}: {order.order_id} → {driver_id}")
 
     # --- Signal processing loop ---
 

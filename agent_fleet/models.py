@@ -355,3 +355,26 @@ class SyncDriverDisconnectInput:
 class MeltdownDemoInput:
     escalation_enabled: bool = False
     max_orders: int = 20
+
+
+@dataclass
+class OrderGenerationInput:
+    max_orders: int = 20
+    order_interval_seconds: int = 15
+
+
+@dataclass
+class OrderAssignmentResult:
+    """Signaled from OrderGenerationWorkflow to parent with each new order."""
+
+    order_id: str
+    hotel: str
+    delivery_lat: float
+    delivery_lng: float
+    driver_id: str
+    reasoning_summary: str
+    # Order details carried through for assignment
+    priority: str = "standard"
+    servings: int = 1
+    deadline_minutes: int = 45
+    event: str = ""
