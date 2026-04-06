@@ -23,6 +23,7 @@ from google.adk.tools import ToolContext
 from temporalio.common import RetryPolicy
 from temporalio.contrib.google_adk_agents import TemporalModel
 from temporalio.contrib.google_adk_agents.workflow import activity_tool
+from temporalio.workflow import ActivityConfig
 
 from agent_fleet.activities import (
     tool_get_fleet_status,
@@ -104,7 +105,10 @@ def create_assignment_fleet_agent() -> Agent:
     """
     return Agent(
         name="assignment_fleet_agent",
-        model=TemporalModel(GEMINI_MODEL),
+        model=TemporalModel(
+            GEMINI_MODEL,
+            activity_config=ActivityConfig(task_queue=AGENTS_QUEUE),
+        ),
         description=(
             "Operational fleet specialist for order assignment. Assesses AI-Driver "
             "positions, capacity, cooler status, and ETAs to recommend the best driver."
@@ -136,7 +140,10 @@ def create_assignment_customer_agent() -> Agent:
     """
     return Agent(
         name="assignment_customer_agent",
-        model=TemporalModel(GEMINI_MODEL),
+        model=TemporalModel(
+            GEMINI_MODEL,
+            activity_config=ActivityConfig(task_queue=AGENTS_QUEUE),
+        ),
         description=(
             "Customer priority specialist for order assignment. Evaluates order "
             "priority, urgency, deadline pressure, and hotel context."
@@ -167,7 +174,10 @@ def create_assignment_resolver() -> Agent:
     """
     return Agent(
         name="assignment_resolver",
-        model=TemporalModel(GEMINI_MODEL),
+        model=TemporalModel(
+            GEMINI_MODEL,
+            activity_config=ActivityConfig(task_queue=AGENTS_QUEUE),
+        ),
         description=(
             "Assignment coordinator. Synthesizes fleet and customer assessments "
             "to pick the best driver for a new order."

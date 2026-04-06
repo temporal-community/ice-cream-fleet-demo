@@ -87,12 +87,20 @@ def _get_api_activities() -> dict:
 
 
 def create_workflow_worker(client: Client) -> Worker:
-    """Workflow-only worker — no activities, dedicated to replay."""
-    return Worker(
-        client,
+    """Workflow-only worker — no activities, dedicated to replay.
+
+    GoogleAdkPlugin is needed here for sandbox passthroughs (google.adk,
+    google.genai) and deterministic runtime (uuid, time) during replay.
+    """
+    kwargs: dict = dict(
         task_queue=WORKFLOWS_QUEUE,
         workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow],
     )
+    if not MOCK_MODE:
+        from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
+
+        kwargs["plugins"] = [GoogleAdkPlugin()]
+    return Worker(client, **kwargs)
 
 
 def create_delivery_worker(client: Client) -> Worker:

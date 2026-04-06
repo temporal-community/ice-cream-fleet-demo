@@ -121,7 +121,7 @@ The key design principles:
 
 The agents are not workflows — they run inside **activities**. `reason_about_assignment` is a regular Temporal activity that spins up an ADK runner internally. The workflow calls the activity and passes driver state as input (`DriverSnapshot`s, `disconnected_agents`); the activity runs the agents using that input. This is the right layering: the workflow handles durability, state, and coordination; the activity handles the work.
 
-Fleet Agent, Customer Agent, and Resolver are all **LLM Agents** — each is an `Agent` with `model=TemporalModel(DEFAULT_MODEL)`, meaning every Gemini call they make becomes a `invoke_model` Temporal activity. The `create_order_assignment_agent()` function returns an **Orchestrator Agent** (`SequentialAgent`) — it has no model, makes no LLM calls, and has no corresponding Temporal activity. It purely sequences the sub-agents.
+Fleet Agent, Customer Agent, and Resolver are all **LLM Agents** — each is an `Agent` with `model=TemporalModel(GEMINI_MODEL, activity_config=ActivityConfig(task_queue=AGENTS_QUEUE))`, meaning every Gemini call they make becomes an `invoke_model` Temporal activity routed to the agents worker. The `create_order_assignment_agent()` function returns an **Orchestrator Agent** (`SequentialAgent`) — it has no model, makes no LLM calls, and has no corresponding Temporal activity. It purely sequences the sub-agents.
 
 The full agent pipeline is composed in [`agent_fleet/agents.py`](agent_fleet/agents.py) using ADK's `ParallelAgent` and `SequentialAgent`:
 
@@ -159,7 +159,10 @@ Here's exactly what this looks like in [`agent_fleet/agents.py`](agent_fleet/age
 # Each agent gets TemporalModel — LLM calls become invoke_model activities automatically
 fleet_agent = Agent(
     name="assignment_fleet_agent",
-    model=TemporalModel(DEFAULT_MODEL),   # ← this is the only change vs a plain ADK agent
+    model=TemporalModel(
+        GEMINI_MODEL,
+        activity_config=ActivityConfig(task_queue=AGENTS_QUEUE),  # route to agents worker
+    ),
     tools=[_fleet_status_tool, _route_info_tool, _publish_event_tool],
     ...
 )
@@ -205,17 +208,18 @@ The three workers are set up in [`agent_fleet/worker.py`](agent_fleet/worker.py)
 def create_workflow_worker(client: Client) -> Worker:
     """Workflow-only worker — no activities, dedicated to replay."""
     return Worker(client, task_queue=WORKFLOWS_QUEUE,
-                  workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow])
+                  workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow],
+                  plugins=[GoogleAdkPlugin()])  # sandbox + determinism for replay
 
 def create_agents_worker(client: Client) -> Worker:
-    """ADK/LLM activities — rate-limited, GoogleAdkPlugin only registered here."""
+    """ADK/LLM activities — rate-limited."""
     return Worker(client, task_queue=AGENTS_QUEUE,
                   activities=[reason_about_assignment, register_assignment, ...],
                   max_concurrent_activities=5,
-                  plugins=[GoogleAdkPlugin()])
+                  plugins=[GoogleAdkPlugin()])  # invoke_model activity registration
 ```
 
-`GoogleAdkPlugin` only needs to be registered on the worker that runs ADK activities — the delivery and workflows workers don't need it.
+`GoogleAdkPlugin` is registered on **both** the workflow worker and the agents worker. The workflow worker needs it for sandbox passthroughs (`google.adk`, `google.genai`) and deterministic runtime (`uuid`, `time`) during replay. The agents worker needs it because it hosts the `invoke_model` activity that actually calls Gemini. `TemporalModel` uses `ActivityConfig(task_queue=AGENTS_QUEUE)` to route LLM calls from the workflow to the agents queue.
 
 ### Mock mode — no inline fallbacks
 

@@ -1241,11 +1241,11 @@ function connectWS() {
   ws = new WebSocket(`${protocol}//${location.host}/ws`);
   ws.onmessage = (e) => {
     const state = JSON.parse(e.data);
-    updateCrews(state.crews);
+    updateCrews(state.drivers);
     updateOrders(state.orders);
     updateAgentEvents(state.agent_events, state.agent_health);
     updateEventLog(state.event_log);
-    updateCrewDisconnectBanner(state.crews);
+    updateCrewDisconnectBanner(state.drivers);
   };
   ws.onclose = () => setTimeout(connectWS, 1000);
 }
@@ -1258,30 +1258,30 @@ function updateCrews(crews) {
     const color = CREW_COLORS[c.status] || '#94a3b8';
 
     // Calculate bearing from previous position
-    let bearing = prevPositions[c.crew_id]?.bearing || 0;
-    const prev = prevPositions[c.crew_id]?.pos;
+    let bearing = prevPositions[c.driver_id]?.bearing || 0;
+    const prev = prevPositions[c.driver_id]?.pos;
     if (prev && (prev[0] !== pos[0] || prev[1] !== pos[1])) {
       bearing = getBearing(prev, pos);
     }
-    prevPositions[c.crew_id] = { pos, bearing };
+    prevPositions[c.driver_id] = { pos, bearing };
 
-    if (!crewMarkers[c.crew_id]) {
-      crewMarkers[c.crew_id] = L.marker(pos, { icon: crewIcon(color, false, bearing) }).addTo(map);
-      crewMarkers[c.crew_id].bindTooltip(c.crew_id, { direction: 'top', offset: [0, -24] });
-      crewTrails[c.crew_id] = L.polyline([], {
+    if (!crewMarkers[c.driver_id]) {
+      crewMarkers[c.driver_id] = L.marker(pos, { icon: crewIcon(color, false, bearing) }).addTo(map);
+      crewMarkers[c.driver_id].bindTooltip(c.driver_id, { direction: 'top', offset: [0, -24] });
+      crewTrails[c.driver_id] = L.polyline([], {
         color, weight: 2, opacity: 0.4, dashArray: '4 6',
       }).addTo(map);
     } else {
-      crewMarkers[c.crew_id].setLatLng(pos);
-      crewMarkers[c.crew_id].setIcon(crewIcon(color, false, bearing));
+      crewMarkers[c.driver_id].setLatLng(pos);
+      crewMarkers[c.driver_id].setIcon(crewIcon(color, false, bearing));
     }
 
     if (c.status === 'idle') {
       // Clear trail after delivery completes
-      crewTrails[c.crew_id].setLatLngs([]);
+      crewTrails[c.driver_id].setLatLngs([]);
     } else if (c.path_history && c.path_history.length > 0) {
-      crewTrails[c.crew_id].setLatLngs(c.path_history.map(p => [p.lat, p.lng]));
-      crewTrails[c.crew_id].setStyle({ color });
+      crewTrails[c.driver_id].setLatLngs(c.path_history.map(p => [p.lat, p.lng]));
+      crewTrails[c.driver_id].setStyle({ color });
     }
   });
 
@@ -1291,7 +1291,7 @@ function updateCrews(crews) {
     const orders = c.current_orders.length > 0 ? c.current_orders.join(', ') : 'none';
     return `
       <div class="card">
-        <h3>${c.crew_id} <span class="status-pill status-${c.status}">${c.status.replace(/_/g, ' ')}</span></h3>
+        <h3>${c.driver_id} <span class="status-pill status-${c.status}">${c.status.replace(/_/g, ' ')}</span></h3>
         <div class="detail">Orders: ${orders}</div>
       </div>
     `;
@@ -1312,7 +1312,7 @@ function updateOrders(orders) {
           <span class="status-pill status-${o.status}">${o.status.replace(/_/g, ' ')}</span>
         </h3>
         <div class="detail">${o.label} &middot; ${o.servings} servings</div>
-        <div class="detail">AI-Driver: ${o.assigned_crew_id || 'unassigned'} &middot; Deadline: ${o.deadline_minutes}min</div>
+        <div class="detail">AI-Driver: ${o.assigned_driver_id || 'unassigned'} &middot; Deadline: ${o.deadline_minutes}min</div>
         ${lastLog ? `<div class="detail" style="color: #9ca3af;">${lastLog}</div>` : ''}
       </div>
     `;
@@ -1553,12 +1553,12 @@ function updateCrewDisconnectBanner(crews) {
   const recovering = Object.values(crews).filter(c => c.recovering);
 
   if (recovering.length > 0) {
-    const ids = recovering.map(c => c.crew_id).join(', ');
+    const ids = recovering.map(c => c.driver_id).join(', ');
     banner.classList.add('active', 'recovering');
     textEl.textContent = `Replaying — ${ids}`;
     subEl.textContent = 'Temporal restoring workflow state from durable history...';
   } else if (disconnected.length > 0) {
-    const ids = disconnected.map(c => c.crew_id).join(', ');
+    const ids = disconnected.map(c => c.driver_id).join(', ');
     banner.classList.add('active');
     banner.classList.remove('recovering');
     textEl.textContent = `${ids} Disconnected`;

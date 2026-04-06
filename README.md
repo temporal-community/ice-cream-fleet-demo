@@ -58,7 +58,7 @@ Orders auto-generate on a timer from Las Vegas Strip venues. AI agents reason ab
 │       └─ Customer Agent tool_get_order_priorities     │
 │                         tool_search_hotel_context     │
 │       Assignment Resolver → tool_submit_assignment    │
-│       model=TemporalModel(), tools=activity_tool()    │
+│       TemporalModel(activity_config→AGENTS_QUEUE)     │
 │                                                       │
 │  FleetState singleton (UI projection only)            │
 │  └─ activities write here for frontend WebSocket      │
@@ -82,7 +82,7 @@ Orders auto-generate on a timer from Las Vegas Strip venues. AI agents reason ab
 
 Fleet Agent, Customer Agent, and Resolver are LLM Agents. The outer `order_assignment` pipeline is an Orchestrator Agent — it sequences them with no model of its own. Temporal never sees the orchestration logic; it only sees individual LLM calls and tool calls as discrete activities.
 
-**3-queue separation**: LLM calls are slow (3–5s). Without separate queues, assignment requests could starve navigation activities and cause heartbeat timeouts. The agents queue caps at 5 concurrent; delivery at 20. The workflows queue runs only workflows (no activities) — dedicated to replay. All three workers run in the same process; `FleetState` is a write-only UI projection that activities update for the frontend WebSocket.
+**3-queue separation**: LLM calls are slow (3–5s). Without separate queues, assignment requests could starve navigation activities and cause heartbeat timeouts. The agents queue caps at 5 concurrent; delivery at 20. The workflows queue runs only workflows (no activities) — dedicated to replay. `GoogleAdkPlugin` is registered on **both** the workflow worker (sandbox passthroughs + deterministic runtime for replay) and the agents worker (`invoke_model` activity registration). `TemporalModel` uses `ActivityConfig(task_queue=AGENTS_QUEUE)` to route LLM calls to the agents worker. All three workers run in the same process; `FleetState` is a write-only UI projection that activities update for the frontend WebSocket.
 
 ### What each agent reasons about
 
