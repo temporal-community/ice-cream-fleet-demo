@@ -34,8 +34,6 @@ from agent_fleet.activities import (
     pickup_orders,
     publish_agent_event,
     register_assignment,
-    sync_driver_disconnect,
-    sync_driver_recovery_complete,
     tool_get_fleet_status,
     tool_get_order_priorities,
     tool_publish_agent_event,
@@ -138,8 +136,6 @@ def create_delivery_worker(client: Client) -> Worker:
             get_fleet_status,
             get_order_priorities,
             publish_agent_event,
-            sync_driver_disconnect,
-            sync_driver_recovery_complete,
         ],
         max_concurrent_activities=20,
     )

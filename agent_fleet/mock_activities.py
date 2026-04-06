@@ -240,7 +240,23 @@ async def mock_reason_about_assignment(
 
     All decision inputs come from inp (workflow state) — not from FleetState.
     FleetState writes are UI projection only.
+    Agent events are collected and returned to the workflow via the output.
     """
+    import time
+
+    collected_events: list[dict] = []
+
+    def _collect_event(agent_name: str, event_type: str, content: str, summary: str = "") -> None:
+        collected_events.append(
+            {
+                "agent_name": agent_name,
+                "event_type": event_type,
+                "content": content,
+                "summary": summary,
+                "timestamp": time.time(),
+            }
+        )
+
     # --- Fleet Agent: find best driver from workflow-provided snapshots ---
     fleet_agent_offline = "fleet_agent" in inp.disconnected_agents
 
@@ -272,6 +288,12 @@ async def mock_reason_about_assignment(
 
     if fleet_agent_offline:
         # Fleet Agent is offline — publish offline notice and skip its assessment
+        _collect_event(
+            "fleet_agent",
+            "offline",
+            "Fleet Agent offline — resolver using last-known data.",
+            summary="Fleet Agent offline",
+        )
         await fleet.publish_agent_event(
             "fleet_agent",
             "offline",
@@ -280,6 +302,12 @@ async def mock_reason_about_assignment(
         )
         await asyncio.sleep(0.2)
     else:
+        _collect_event(
+            "fleet_agent",
+            "tool_call",
+            f"New order — {inp.hotel}. Scanning fleet.",
+            summary=f"New order — {inp.hotel}",
+        )
         await fleet.publish_agent_event(
             "fleet_agent",
             "tool_call",
@@ -288,6 +316,12 @@ async def mock_reason_about_assignment(
         )
         await asyncio.sleep(0.4)
 
+        _collect_event(
+            "fleet_agent",
+            "assessment",
+            f"{_driver_label(best_driver)} — closest, ~{best_eta}min ETA.",
+            summary=f"{_driver_label(best_driver)} — ETA {best_eta}min",
+        )
         await fleet.publish_agent_event(
             "fleet_agent",
             "assessment",
@@ -307,6 +341,12 @@ async def mock_reason_about_assignment(
     vip_tier = venue_info.get("vip_tier", "standard")
 
     if customer_agent_offline:
+        _collect_event(
+            "customer_agent",
+            "offline",
+            "Customer Agent offline — using order metadata.",
+            summary="Customer Agent offline",
+        )
         await fleet.publish_agent_event(
             "customer_agent",
             "offline",
@@ -316,12 +356,22 @@ async def mock_reason_about_assignment(
         await asyncio.sleep(0.2)
     else:
         urgency_note = "Time-critical" if urgency != "comfortable" else "Standard"
+        customer_content = (
+            f"{inp.priority.upper()} / {vip_tier} — {inp.servings} servings, "
+            f"{inp.deadline_minutes}min deadline. {urgency_note}."
+        )
+        customer_summary = f"{inp.priority.upper()} — {urgency} deadline"
+        _collect_event(
+            "customer_agent",
+            "assessment",
+            customer_content,
+            summary=customer_summary,
+        )
         await fleet.publish_agent_event(
             "customer_agent",
             "assessment",
-            f"{inp.priority.upper()} / {vip_tier} — {inp.servings} servings, "
-            f"{inp.deadline_minutes}min deadline. {urgency_note}.",
-            summary=f"{inp.priority.upper()} — {urgency} deadline",
+            customer_content,
+            summary=customer_summary,
         )
         await asyncio.sleep(0.3)
 
@@ -351,6 +401,12 @@ async def mock_reason_about_assignment(
         resolver_body += resolver_context + "\n"
     resolver_body += f"{best_label} -> {inp.hotel}, ETA ~{best_eta}min."
 
+    _collect_event(
+        "resolver",
+        "plan",
+        resolver_body,
+        summary=resolver_summary,
+    )
     await fleet.publish_agent_event(
         "resolver",
         "plan",
@@ -365,4 +421,5 @@ async def mock_reason_about_assignment(
     return ReasonAboutAssignmentOutput(
         driver_id=best_driver,
         reasoning_summary=f"{_driver_label(best_driver)} — closest, ~{best_eta}min ETA",
+        agent_events=collected_events,
     )

@@ -161,6 +161,7 @@ class ReasonAboutAssignmentInput:
 class ReasonAboutAssignmentOutput:
     driver_id: str
     reasoning_summary: str
+    agent_events: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -341,14 +342,6 @@ class DriverDisconnectInput:
 @dataclass
 class AgentDisconnectInput:
     agent_name: str  # "fleet_agent", "customer_agent", or "resolver"
-
-
-@dataclass
-class SyncDriverDisconnectInput:
-    """Pushed from workflow to FleetState after processing a disconnect/reconnect signal."""
-
-    driver_id: str
-    disconnected: bool
 
 
 @dataclass

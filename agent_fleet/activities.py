@@ -40,7 +40,6 @@ from agent_fleet.models import (
     PublishAgentEventOutput,
     ReasonAboutAssignmentInput,
     ReasonAboutAssignmentOutput,
-    SyncDriverDisconnectInput,
 )
 from agent_fleet.simulation import fleet
 
@@ -509,28 +508,6 @@ async def publish_agent_event(
         inp.agent_name, inp.event_type, inp.content, summary=inp.summary
     )
     return PublishAgentEventOutput(success=True)
-
-
-# --- Workflow-driven state sync activities ---
-
-
-@activity.defn
-async def sync_driver_disconnect(inp: SyncDriverDisconnectInput) -> None:
-    """Sync driver disconnect/reconnect state to FleetState for the frontend.
-
-    Called by the workflow after processing a disconnect/reconnect signal.
-    Everything flows through Temporal — this is the only path to FleetState.
-    """
-    if inp.disconnected:
-        await fleet.disconnect_driver(inp.driver_id)
-    else:
-        await fleet.reconnect_driver(inp.driver_id)
-
-
-@activity.defn
-async def sync_driver_recovery_complete(driver_id: str) -> None:
-    """Clear the recovery visual indicator after replay completes."""
-    await fleet.mark_driver_recovery_complete(driver_id)
 
 
 # --- Customer change activities ---

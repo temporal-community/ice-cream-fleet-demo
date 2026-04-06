@@ -36,9 +36,8 @@ from agent_fleet.models import (
     MeltdownDemoInput,
 )
 from agent_fleet.queues import WORKFLOWS_QUEUE
-from agent_fleet.simulation import fleet
 from agent_fleet.worker import create_worker
-from agent_fleet.workflows import MeltdownDemoWorkflow
+from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -162,9 +161,8 @@ async def start_demo():
 
 @app.post("/api/reset")
 async def reset_demo():
-    """Cancel running workflows and reset simulation state."""
+    """Cancel running workflows and reset state."""
     await _cancel_running_workflows()
-    fleet.reset()
     return {"status": "reset"}
 
 
@@ -251,10 +249,7 @@ class AgentDisconnectRequest(BaseModel):
 
 @app.post("/api/disconnect-agent")
 async def disconnect_agent(body: AgentDisconnectRequest):
-    """Take a specific agent offline. Other agents compensate."""
-    await fleet.disconnect_agent(body.agent_name)
-
-    # Signal the workflow
+    """Take a specific agent offline. Signals the workflow only."""
     if _temporal_client is not None:
         try:
             handle = _temporal_client.get_workflow_handle("meltdown-demo")
@@ -274,10 +269,7 @@ async def disconnect_agent(body: AgentDisconnectRequest):
 
 @app.post("/api/reconnect-agent")
 async def reconnect_agent(body: AgentDisconnectRequest):
-    """Bring a specific agent back online."""
-    await fleet.reconnect_agent(body.agent_name)
-
-    # Signal the workflow
+    """Bring a specific agent back online. Signals the workflow only."""
     if _temporal_client is not None:
         try:
             handle = _temporal_client.get_workflow_handle("meltdown-demo")
@@ -287,13 +279,6 @@ async def reconnect_agent(body: AgentDisconnectRequest):
             )
         except Exception as e:
             logger.error(f"Failed to signal agent reconnect: {e}")
-
-    await fleet.publish_agent_event(
-        body.agent_name,
-        "reconnected",
-        f"{body.agent_name} is back online and ready for reasoning.",
-        summary=f"{body.agent_name} reconnected",
-    )
 
     return {
         "status": "agent_reconnected",
@@ -377,10 +362,69 @@ async def toggle_escalation():
 # --- State query endpoints ---
 
 
+async def _build_snapshot_from_queries() -> dict:
+    """Build frontend state by querying Temporal workflows instead of FleetState."""
+    empty = {
+        "drivers": {},
+        "orders": {},
+        "agent_events": [],
+        "event_log": [],
+        "agent_health": {},
+    }
+    if _temporal_client is None:
+        return empty
+
+    try:
+        parent = _temporal_client.get_workflow_handle("meltdown-demo")
+        parent_status = await parent.query(MeltdownDemoWorkflow.get_status)
+    except Exception:
+        return empty
+
+    # Query each driver workflow
+    drivers = {}
+    for i in range(1, 4):
+        driver_id = f"ai-driver-{i}"
+        try:
+            handle = _temporal_client.get_workflow_handle(f"route-{driver_id}")
+            driver_status = await handle.query(DriverRouteWorkflow.get_status)
+            drivers[driver_id] = {
+                "driver_id": driver_id,
+                "position": {"lat": driver_status["lat"], "lng": driver_status["lng"]},
+                "status": driver_status["status"],
+                "current_orders": driver_status["current_orders"],
+                "path_history": driver_status["path_history"],
+                "disconnected": driver_status["is_disconnected"],
+                "recovering": driver_status["is_recovering"],
+                "capacity": 3,
+                "battery_pct": 100,
+            }
+        except Exception:
+            # Workflow not started yet
+            drivers[driver_id] = {
+                "driver_id": driver_id,
+                "position": {"lat": 36.1040, "lng": -115.1530},
+                "status": "idle",
+                "current_orders": [],
+                "path_history": [],
+                "disconnected": False,
+                "recovering": False,
+                "capacity": 3,
+                "battery_pct": 100,
+            }
+
+    return {
+        "drivers": drivers,
+        "orders": parent_status.get("orders", {}),
+        "agent_events": parent_status.get("agent_events", []),
+        "event_log": [],
+        "agent_health": parent_status.get("agent_health", {}),
+    }
+
+
 @app.get("/api/state")
 async def get_state():
-    """Get current fleet state as JSON."""
-    return await fleet.snapshot()
+    """Get current fleet state by querying Temporal workflows."""
+    return await _build_snapshot_from_queries()
 
 
 @app.get("/api/locations")
@@ -411,12 +455,13 @@ async def get_locations():
 
 @app.websocket("/ws")
 async def websocket_state(ws: WebSocket):
-    """Push fleet state to the frontend every 300ms."""
+    """Push fleet state to the frontend every 300ms via Temporal workflow queries."""
     await ws.accept()
     last_snapshot: str | None = None
     try:
         while True:
-            data = json.dumps(await fleet.snapshot())
+            snapshot = await _build_snapshot_from_queries()
+            data = json.dumps(snapshot)
             if data != last_snapshot:
                 await ws.send_text(data)
                 last_snapshot = data

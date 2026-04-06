@@ -17,8 +17,6 @@ from agent_fleet.activities import (
     navigate_to,
     pickup_orders,
     publish_agent_event,
-    sync_driver_disconnect,
-    sync_driver_recovery_complete,
 )
 from agent_fleet.locations import VENUES
 from agent_fleet.mock_activities import (
@@ -70,8 +68,6 @@ async def run_workers(env: WorkflowEnvironment):
             get_fleet_status,
             get_order_priorities,
             publish_agent_event,
-            sync_driver_disconnect,
-            sync_driver_recovery_complete,
         ],
     )
     agents_worker = Worker(
