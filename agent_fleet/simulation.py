@@ -45,9 +45,9 @@ class FleetState:
         self._init_state()
 
     def _init_state(self) -> None:
-        # 3 AI-Crews starting at the ice cream shop
+        # 3 AI-Drivers starting at the ice cream shop
         for i in range(1, 4):
-            cid = f"ai-crew-{i}"
+            cid = f"ai-driver-{i}"
             self.crews[cid] = Crew(
                 crew_id=cid,
                 position=Coords(lat=WAREHOUSE.lat, lng=WAREHOUSE.lng),
@@ -76,7 +76,7 @@ class FleetState:
             c.status_before_disconnect = c.status
             c.disconnected = True
             c.status = CrewStatus.DISCONNECTED
-            self._log(f"[DISCONNECT] AI-Crew {crew_id} lost connection")
+            self._log(f"[DISCONNECT] AI-Driver {crew_id} lost connection")
 
     async def reconnect_crew(self, crew_id: str) -> None:
         """Clear disconnect flag and enter per-crew recovery phase (UI projection only)."""
@@ -85,14 +85,14 @@ class FleetState:
             c.disconnected = False
             c.recovering = True
             c.status = c.status_before_disconnect
-            self._log(f"[RECONNECT] AI-Crew {crew_id} reconnecting — replaying...")
+            self._log(f"[RECONNECT] AI-Driver {crew_id} reconnecting — replaying...")
 
     async def mark_crew_recovery_complete(self, crew_id: str) -> None:
         """Clear the per-crew recovery flag after replay completes."""
         async with self._lock:
             c = self.crews[crew_id]
             c.recovering = False
-            self._log(f"[RECONNECT] AI-Crew {crew_id} replay complete — resumed")
+            self._log(f"[RECONNECT] AI-Driver {crew_id} replay complete — resumed")
 
     async def is_crew_disconnected(self, crew_id: str) -> bool:
         async with self._lock:
@@ -135,7 +135,7 @@ class FleetState:
     async def set_crew_status(self, crew_id: str, status: CrewStatus) -> None:
         async with self._lock:
             self.crews[crew_id].status = status
-            self._log(f"AI-Crew {crew_id} -> {status.value}")
+            self._log(f"AI-Driver {crew_id} -> {status.value}")
 
     async def get_crew_position(self, crew_id: str) -> tuple[float, float]:
         async with self._lock:
@@ -293,7 +293,7 @@ class FleetState:
                 lines.append(
                     f"  {oid}: {o.hotel} ({o.label}), "
                     f"priority={o.priority.value}, status={o.status.value}, "
-                    f"AI-Crew={o.assigned_crew_id or 'unassigned'}, "
+                    f"AI-Driver={o.assigned_crew_id or 'unassigned'}, "
                     f"deadline={o.deadline_minutes}min"
                 )
             return "\n".join(lines)

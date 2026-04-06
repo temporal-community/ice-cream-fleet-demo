@@ -20,7 +20,7 @@ Orders auto-generate on a timer from Las Vegas Strip venues. AI agents reason ab
 | Scenario | What Happens | What It Shows |
 |----------|-------------|---------------|
 | **Agent Disconnect** | Take an agent offline mid-reasoning | ADK degrades gracefully — Resolver compensates with available data. Temporal records every step that completed. Two resilience layers. |
-| **Crew Disconnect** | Take a single AI-Crew offline mid-delivery | Workflow cancels the running activity via cancellation scope, waits for reconnect signal, resumes. Everything flows through Temporal — API just sends signals. |
+| **Crew Disconnect** | Take a single AI-Driver offline mid-delivery | Workflow cancels the running activity via cancellation scope, waits for reconnect signal, resumes. Everything flows through Temporal — API just sends signals. |
 | **Customer Change** | Submit an address change or cancellation | Human-in-the-loop: workflow pauses on `wait_condition`, resumes immediately on signal — no polling, no timeout |
 
 ## Architecture
@@ -84,14 +84,19 @@ Fleet Agent, Customer Agent, and Resolver are LLM Agents. The outer `order_assig
 
 **3-queue separation**: LLM calls are slow (3–5s). Without separate queues, assignment requests could starve navigation activities and cause heartbeat timeouts. The agents queue caps at 5 concurrent; delivery at 20. The workflows queue runs only workflows (no activities) — dedicated to replay. All three workers run in the same process; `FleetState` is a write-only UI projection that activities update for the frontend WebSocket.
 
-### Activity-backed tools
+### What each agent reasons about
 
-| Tool | Agent | Purpose |
-|------|-------|---------|
-| **Google Maps Directions** (`tool_get_route_info`) | Fleet Agent | Driving routes and ETAs for crew selection |
-| **Hotel Search** (`tool_search_hotel_context`) | Customer Agent | Live hotel event context — conferences, VIP bookings |
+| Agent | Reasoning | Tools |
+|-------|-----------|-------|
+| **Fleet Agent** (operational) | Crew positions, capacity (free slots), ETAs to destination, disconnect status — excludes unavailable crews | `tool_get_fleet_status`, `tool_get_route_info` (Google Maps) |
+| **Customer Agent** (priority) | VIP vs standard tier, deadline pressure, hotel events (conferences, galas), servings/guest count | `tool_get_order_priorities`, `tool_search_hotel_context` (Google Search) |
+| **Resolver** (synthesis) | Weighs Fleet + Customer assessments, compensates if either agent is offline, picks final crew | `tool_submit_assignment`, `tool_publish_agent_event` |
 
-Both are wrapped with `activity_tool()` and routed to the agents queue. Results are recorded in Temporal history — if the worker restarts mid-call, they replay from the log. Hotel Search calls Google Custom Search API when `GOOGLE_CSE_ID` is set, otherwise returns curated mock data.
+Fleet and Customer run **in parallel** (`ParallelAgent`), then the Resolver runs **sequentially** after both complete (`SequentialAgent`). All tools are wrapped with `activity_tool()` — each call is a Temporal activity, recorded in the event log. If the worker restarts mid-call, results replay from the log.
+
+### Mock mode
+
+When API keys are not set (`MOCK_MODE`), the worker registers mock activity implementations from `mock_activities.py` instead of real ones. Same activity names, deterministic data. The worker startup is the single place that decides real vs mock — no runtime try/except fallbacks inside activities. Real activities let failures propagate to Temporal's retry mechanism.
 
 ## Prerequisites
 
@@ -101,7 +106,7 @@ Both are wrapped with `activity_tool()` and routed to the agents queue. Results 
 - Google Maps API key (optional — falls back to mock route data)
 - Google Custom Search Engine ID (optional — falls back to curated hotel data)
 
-All API keys fall back gracefully: without `GOOGLE_API_KEY`, agents use deterministic mock reasoning. Without `GOOGLE_MAPS_API_KEY`, route checks use calculated distance/ETA estimates. Without `GOOGLE_CSE_ID`, hotel research uses curated Las Vegas hotel context.
+Without API keys, the demo runs in mock mode: deterministic reasoning, calculated ETAs, and curated hotel context. Mock implementations live in `mock_activities.py` — registered by the worker at startup, not as inline fallbacks.
 
 ## Quick Start
 
@@ -131,7 +136,7 @@ echo 'export GOOGLE_CSE_ID="your-cse-id"' >> .env  # optional
 ## Demo Flow
 
 1. **Start Deliveries** — Orders auto-generate every 15s. AI agents reason per-order (Fleet Agent checks positions/capacity, Customer Agent evaluates priority) and assign to the best crew. Crews continuously pick up from Frosty's Ice Cream and deliver.
-2. **Crew Disconnect** — Select an AI-Crew → disconnect signal → workflow cancels activity → reconnect signal → seamless resume. Everything flows through Temporal.
+2. **Crew Disconnect** — Select an AI-Driver → disconnect signal → workflow cancels activity → reconnect signal → seamless resume. Everything flows through Temporal.
 3. **Agent Disconnect** — Take an agent offline → Resolver compensates with available data → reconnect → full reasoning resumes
 4. **Customer Change** — Submit a change → workflow pauses waiting for approval → approve/reject → order updated or discarded
 
@@ -142,6 +147,7 @@ echo 'export GOOGLE_CSE_ID="your-cse-id"' >> .env  # optional
 | `agent_fleet/models.py` | Dataclass models for all Temporal payloads (incl. `CrewSnapshot`) |
 | `agent_fleet/simulation.py` | FleetState — UI projection only (activities write, nothing reads for logic) |
 | `agent_fleet/activities.py` | Temporal activities — navigation, delivery, Maps API, state sync, agent tools |
+| `agent_fleet/mock_activities.py` | Mock activity implementations — registered in mock mode, same activity names |
 | `agent_fleet/workflows.py` | Temporal workflows — owns crew state, cancellation scopes, signals, queries |
 | `agent_fleet/agents.py` | ADK agent composition — Fleet, Customer, Assignment Resolver |
 | `agent_fleet/queues.py` | Task queue name constants (workflows / delivery / agents) |

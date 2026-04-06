@@ -2,7 +2,7 @@
 Temporal activities for the Meltdown ice cream delivery demo.
 
 Each activity is a discrete, retryable unit of work. Activities handle:
-- AI-Crew navigation with heartbeats
+- AI-Driver navigation with heartbeats
 - Order pickup/delivery
 - Fleet status queries (for LLM agents)
 - Customer change execution
@@ -128,7 +128,7 @@ async def get_route_polyline(
 
 @activity.defn(name="tool_get_fleet_status")
 async def tool_get_fleet_status() -> str:
-    """Check current fleet state: AI-Crew positions, cooler conditions, orders."""
+    """Check current fleet state: AI-Driver positions, cooler conditions, orders."""
     return await fleet.get_fleet_summary()
 
 
@@ -158,7 +158,7 @@ async def tool_get_route_info(
     """Get driving route info between two points using Google Maps Directions API.
 
     Returns distance, duration, and step-by-step directions.
-    Use this to assess reroute feasibility and ETAs for AI-Crew dispatching.
+    Use this to assess reroute feasibility and ETAs for AI-Driver dispatching.
     Failures propagate to Temporal's retry mechanism.
 
     Args:
@@ -298,20 +298,9 @@ async def reason_about_assignment(
 
     best_crew = None
     best_dist = float("inf")
-    fleet_lines = []
     for crew in inp.crew_snapshots:
         available = crew.capacity - crew.current_order_count
         dist = math.sqrt((crew.lat - inp.delivery_lat) ** 2 + (crew.lng - inp.delivery_lng) ** 2)
-        dist_miles = dist * 69.0
-        eta_min = max(2, int(dist_miles * 3.5))
-        status_tag = ""
-        if crew.is_disconnected:
-            status_tag = " [DISCONNECTED]"
-
-        fleet_lines.append(
-            f"  {crew.crew_id}: {available} slots free, ~{eta_min}min ETA, "
-            f"status={crew.status}{status_tag}"
-        )
 
         # Skip crews that can't take orders
         if crew.is_disconnected or available <= 0:
@@ -319,21 +308,24 @@ async def reason_about_assignment(
         if dist < best_dist:
             best_dist = dist
             best_crew = crew.crew_id
-
-    fleet_text = "\n".join(fleet_lines)
     if best_crew is None:
         # Fallback: pick any crew with capacity even if busy
-        best_crew = "ai-crew-1"
+        best_crew = "ai-driver-1"
 
     best_eta = max(2, int(best_dist * 69.0 * 3.5))
+
+    # Map crew IDs to driver labels for display
+    def _driver_label(cid: str) -> str:
+        if cid.startswith("ai-driver-"):
+            return f"Driver {cid.split('-')[-1]}"
+        return cid
 
     if fleet_agent_offline:
         # Fleet Agent is offline — publish offline notice and skip its assessment
         await fleet.publish_agent_event(
             "fleet_agent",
             "offline",
-            "Fleet Agent is OFFLINE — unable to provide fleet assessment. "
-            "Resolver will assign based on available data.",
+            "Fleet Agent offline — resolver using last-known data.",
             summary="Fleet Agent offline",
         )
         await asyncio.sleep(0.2)
@@ -341,19 +333,16 @@ async def reason_about_assignment(
         await fleet.publish_agent_event(
             "fleet_agent",
             "tool_call",
-            f"New order {inp.order_id} for {inp.hotel} ({inp.event}). "
-            f"Checking fleet positions and capacity...",
-            summary=f"New order for {inp.hotel} — checking fleet...",
+            f"New order — {inp.hotel}. Scanning fleet.",
+            summary=f"New order — {inp.hotel}",
         )
         await asyncio.sleep(0.4)
 
         await fleet.publish_agent_event(
             "fleet_agent",
             "assessment",
-            f"Fleet scan for {inp.order_id} ({inp.hotel}):\n{fleet_text}\n\n"
-            f"RECOMMENDATION: {best_crew} — closest with capacity, "
-            f"~{best_eta}min ETA.",
-            summary=f"{best_crew} recommended — ~{best_eta}min ETA",
+            f"{_driver_label(best_crew)} — closest, ~{best_eta}min ETA.",
+            summary=f"{_driver_label(best_crew)} — ETA {best_eta}min",
         )
         await asyncio.sleep(0.3)
 
@@ -371,21 +360,18 @@ async def reason_about_assignment(
         await fleet.publish_agent_event(
             "customer_agent",
             "offline",
-            "Customer Agent is OFFLINE — unable to assess customer priority. "
-            "Resolver will use order metadata for prioritization.",
+            "Customer Agent offline — using order metadata.",
             summary="Customer Agent offline",
         )
         await asyncio.sleep(0.2)
     else:
+        urgency_note = "Time-critical" if urgency != "comfortable" else "Standard"
         await fleet.publish_agent_event(
             "customer_agent",
             "assessment",
-            f"Order {inp.order_id}: {inp.hotel} {inp.event}\n"
-            f"  Priority: {inp.priority.upper()} ({vip_tier} tier)\n"
-            f"  Servings: {inp.servings}, Deadline: "
-            f"{inp.deadline_minutes}min [{urgency}]\n\n"
-            f"{'High-profile event — on-time delivery critical.' if urgency != 'comfortable' else 'Standard priority — normal delivery timeline.'}",  # noqa: E501
-            summary=f"{inp.priority.upper()} order, {urgency} deadline",
+            f"{inp.priority.upper()} / {vip_tier} — {inp.servings} servings, "
+            f"{inp.deadline_minutes}min deadline. {urgency_note}.",
+            summary=f"{inp.priority.upper()} — {urgency} deadline",
         )
         await asyncio.sleep(0.3)
 
@@ -396,39 +382,24 @@ async def reason_about_assignment(
     if customer_agent_offline:
         offline_agents.append("Customer Agent")
 
+    best_label = _driver_label(best_crew)
     if offline_agents:
         offline_list = " and ".join(offline_agents)
         if fleet_agent_offline and customer_agent_offline:
-            resolver_context = (
-                f"DEGRADED: {offline_list} offline.\n"
-                f"  Falling back to last-known crew positions + order metadata.\n"
-                f"  Picking nearest crew with capacity as best-effort."
-            )
+            resolver_context = f"Degraded — {offline_list} offline. Best-effort."
         elif fleet_agent_offline:
-            resolver_context = (
-                "DEGRADED: Fleet Agent offline — no live fleet scan.\n"
-                "  Using last-known positions to pick nearest crew.\n"
-                "  Customer priority assessment still available."
-            )
+            resolver_context = "Degraded — Fleet Agent offline. Using last-known positions."
         else:
-            resolver_context = (
-                "DEGRADED: Customer Agent offline — no priority assessment.\n"
-                "  Fleet positions confirmed. Using order metadata for priority."
-            )
-        resolver_summary = f"{inp.order_id} -> {best_crew} (degraded — {offline_list} offline)"
+            resolver_context = "Degraded — Customer Agent offline. Using order metadata."
+        resolver_summary = f"Assigned {best_label} (degraded)"
     else:
         resolver_context = ""
-        resolver_summary = f"{inp.order_id} assigned to {best_crew}"
+        resolver_summary = f"Assigned to {best_label}"
 
     resolver_body = ""
     if resolver_context:
         resolver_body += resolver_context + "\n"
-    resolver_body += (
-        f"ASSIGNMENT: {inp.order_id} -> {best_crew}\n"
-        f"  {inp.hotel} {inp.event} ({inp.servings} servings)\n"
-        f"  {best_crew} dispatching — ETA ~{best_eta}min, "
-        f"deadline {inp.deadline_minutes}min."
-    )
+    resolver_body += f"{best_label} -> {inp.hotel}, ETA ~{best_eta}min."
 
     await fleet.publish_agent_event(
         "resolver",
@@ -443,7 +414,7 @@ async def reason_about_assignment(
     activity.logger.info(f"Assigned {inp.order_id} ({inp.hotel}) -> {best_crew}")
     return ReasonAboutAssignmentOutput(
         crew_id=best_crew,
-        reasoning_summary=f"{best_crew} selected: closest with capacity, ~{best_eta}min ETA",
+        reasoning_summary=f"{_driver_label(best_crew)} — closest, ~{best_eta}min ETA",
     )
 
 
@@ -457,7 +428,7 @@ async def register_assignment(crew_id: str, order_id: str) -> str:
 @activity.defn(name="navigate_to")
 async def navigate_to(inp: NavigateInput) -> NavigateOutput:
     """
-    Simulate AI-Crew navigation by interpolating position over N steps.
+    Simulate AI-Driver navigation by interpolating position over N steps.
 
     Heartbeats on each step. Disconnect handling is two-layer:
     - inp.is_crew_disconnected: pre-flight check (set by workflow)
@@ -467,7 +438,7 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
     # Pre-flight disconnect check — workflow passes current state as input
     if inp.is_crew_disconnected:
         raise RuntimeError(
-            f"AI-Crew {inp.crew_id} is disconnected — activity will retry on reconnect"
+            f"AI-Driver {inp.crew_id} is disconnected — activity will retry on reconnect"
         )
 
     leg = inp.leg if isinstance(inp.leg, str) else str(inp.leg)
@@ -478,7 +449,7 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
     await fleet.update_order_status(
         inp.order_id,
         OrderStatus.IN_TRANSIT,
-        f"AI-Crew {inp.crew_id} navigating to {leg} point",
+        f"En route to {leg}",
     )
 
     # Start position from workflow state (not FleetState)
@@ -543,10 +514,10 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
 async def pickup_orders(inp: PickupInput) -> PickupOutput:
     """Simulate picking up ice cream orders at the kitchen."""
     if inp.is_crew_disconnected:
-        raise RuntimeError(f"AI-Crew {inp.crew_id} is disconnected")
+        raise RuntimeError(f"AI-Driver {inp.crew_id} is disconnected")
     await fleet.set_crew_status(inp.crew_id, CrewStatus.PICKING_UP)
     for oid in inp.order_ids:
-        await fleet.update_order_status(oid, OrderStatus.PICKED_UP, "Ice cream loaded into cooler")
+        await fleet.update_order_status(oid, OrderStatus.PICKED_UP, "Picked up")
 
     await asyncio.sleep(1.5)
 
@@ -558,9 +529,9 @@ async def pickup_orders(inp: PickupInput) -> PickupOutput:
 async def deliver_order(inp: DeliverInput) -> DeliverOutput:
     """Simulate delivering an ice cream order at a hotel."""
     if inp.is_crew_disconnected:
-        raise RuntimeError(f"AI-Crew {inp.crew_id} is disconnected")
+        raise RuntimeError(f"AI-Driver {inp.crew_id} is disconnected")
     await fleet.set_crew_status(inp.crew_id, CrewStatus.DELIVERING)
-    await fleet.update_order_status(inp.order_id, OrderStatus.IN_TRANSIT, "Delivering to hotel")
+    await fleet.update_order_status(inp.order_id, OrderStatus.IN_TRANSIT, "Delivering")
 
     await asyncio.sleep(1.5)
 

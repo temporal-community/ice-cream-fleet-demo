@@ -86,7 +86,7 @@ CREW_CAPACITY = 3
 @workflow.defn
 class CrewRouteWorkflow:
     """
-    Continuous delivery loop for a single AI-Crew.
+    Continuous delivery loop for a single AI-Driver.
 
     Waits for orders via signal, picks up at the shop, delivers to hotel,
     then returns to waiting. Loops until told to stop.
@@ -366,7 +366,7 @@ class CrewRouteWorkflow:
                         f"Could not signal parent for {order.order_id} delivery"
                     )
 
-        return f"AI-Crew {crew_id} completed {len(delivered)} deliveries: {delivered}"
+        return f"AI-Driver {crew_id} completed {len(delivered)} deliveries: {delivered}"
 
 
 # --- Main demo orchestrator ---
@@ -458,7 +458,7 @@ class MeltdownDemoWorkflow:
     def _build_crew_snapshots(self) -> list[CrewSnapshot]:
         """Build crew snapshots from workflow state for activity inputs."""
         snapshots = []
-        for crew_id in ["ai-crew-1", "ai-crew-2", "ai-crew-3"]:
+        for crew_id in ["ai-driver-1", "ai-driver-2", "ai-driver-3"]:
             pos = self._crew_last_position.get(crew_id, (WAREHOUSE.lat, WAREHOUSE.lng))
             order_count = len(self._crew_orders.get(crew_id, []))
             snapshots.append(
@@ -482,14 +482,14 @@ class MeltdownDemoWorkflow:
 
         # Initialize crew state
         for i in range(1, 4):
-            crew_id = f"ai-crew-{i}"
+            crew_id = f"ai-driver-{i}"
             self._crew_orders[crew_id] = []
             self._crew_last_position[crew_id] = (WAREHOUSE.lat, WAREHOUSE.lng)
 
         # Start 3 empty crew child workflows
         route_handles = {}
         for i in range(1, 4):
-            crew_id = f"ai-crew-{i}"
+            crew_id = f"ai-driver-{i}"
             handle = await workflow.start_child_workflow(
                 CrewRouteWorkflow.run,
                 CrewRouteInput(crew_id=crew_id),

@@ -87,7 +87,7 @@ async def tool_submit_assignment(
     """Submit the final order assignment decision. You MUST call this tool with your recommendation.
 
     Args:
-        crew_id: The AI-Crew ID to assign the order to (e.g. "ai-crew-1")
+        crew_id: The AI-Driver ID to assign the order to (e.g. "ai-driver-1")
         reasoning_summary: Brief explanation of why this crew was chosen
     """
     tool_context.state["assignment"] = {
@@ -106,12 +106,12 @@ def create_assignment_fleet_agent() -> Agent:
         name="assignment_fleet_agent",
         model=TemporalModel(GEMINI_MODEL),
         description=(
-            "Operational fleet specialist for order assignment. Assesses AI-Crew "
+            "Operational fleet specialist for order assignment. Assesses AI-Driver "
             "positions, capacity, cooler status, and ETAs to recommend the best crew."
         ),
         instruction=(
             "You are the Fleet Operations AI for Meltdown Ice Cream Delivery. "
-            "A new order has arrived and you need to assess which AI-Crew is best "
+            "A new order has arrived and you need to assess which AI-Driver is best "
             "positioned to handle it.\n\n"
             "Call tool_get_fleet_status to check current fleet state, then "
             "tool_get_route_info to compare ETAs from available crews to the "
@@ -182,7 +182,7 @@ def create_assignment_resolver() -> Agent:
             "- If an agent is offline, compensate with available data\n"
             "- NEVER assign to a DISCONNECTED crew\n\n"
             "You MUST call tool_submit_assignment with:\n"
-            "- crew_id: the AI-Crew that should get this order\n"
+            "- crew_id: the AI-Driver that should get this order\n"
             "- reasoning_summary: brief explanation of the decision\n\n"
             "Also call tool_publish_agent_event with agent_name='resolver' and "
             "event_type='plan' to announce the assignment.\n\n"

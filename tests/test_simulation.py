@@ -23,14 +23,14 @@ async def test_register_and_get_order():
 
 
 async def test_crew_disconnect_and_reconnect():
-    await fleet.disconnect_crew("ai-crew-1")
-    assert await fleet.is_crew_disconnected("ai-crew-1") is True
+    await fleet.disconnect_crew("ai-driver-1")
+    assert await fleet.is_crew_disconnected("ai-driver-1") is True
 
-    crew = await fleet.get_crew("ai-crew-1")
+    crew = await fleet.get_crew("ai-driver-1")
     assert crew.status == CrewStatus.DISCONNECTED
 
-    await fleet.reconnect_crew("ai-crew-1")
-    assert await fleet.is_crew_disconnected("ai-crew-1") is False
+    await fleet.reconnect_crew("ai-driver-1")
+    assert await fleet.is_crew_disconnected("ai-driver-1") is False
 
 
 async def test_agent_disconnect_and_reconnect():
@@ -54,11 +54,11 @@ async def test_assign_order_to_crew():
         delivery_coords=Coords(lat=36.1162, lng=-115.1745),
         deadline_minutes=40,
     )
-    await fleet.assign_order_to_crew("ai-crew-1", "order-1")
+    await fleet.assign_order_to_crew("ai-driver-1", "order-1")
 
     order = await fleet.get_order("order-1")
-    assert order.assigned_crew_id == "ai-crew-1"
+    assert order.assigned_crew_id == "ai-driver-1"
     assert order.status == OrderStatus.ASSIGNED
 
-    crew = await fleet.get_crew("ai-crew-1")
+    crew = await fleet.get_crew("ai-driver-1")
     assert "order-1" in crew.current_orders

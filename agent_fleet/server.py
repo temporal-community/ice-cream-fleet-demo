@@ -96,10 +96,10 @@ async def _cancel_running_workflows() -> None:
     """Best-effort terminate of known workflow IDs."""
     if _temporal_client is None:
         return
-    # Terminate main workflow and all AI-Crew routes
+    # Terminate main workflow and all AI-Driver routes
     workflow_ids = ["meltdown-demo"]
     for i in range(1, 4):
-        workflow_ids.append(f"route-ai-crew-{i}")
+        workflow_ids.append(f"route-ai-driver-{i}")
     for wf_id in workflow_ids:
         try:
             handle = _temporal_client.get_workflow_handle(wf_id)
@@ -167,7 +167,7 @@ async def reset_demo():
 
 
 class CrewDisconnectRequest(BaseModel):
-    crew_id: str = "ai-crew-1"
+    crew_id: str = "ai-driver-1"
 
 
 @app.post("/api/disconnect-crew")
@@ -198,7 +198,7 @@ async def disconnect_crew(body: CrewDisconnectRequest):
     return {
         "status": "crew_disconnected",
         "crew_id": body.crew_id,
-        "message": f"AI-Crew {body.crew_id} disconnected. Other crews continue delivering.",
+        "message": f"AI-Driver {body.crew_id} disconnected. Other crews continue delivering.",
     }
 
 
@@ -231,7 +231,8 @@ async def reconnect_crew(body: CrewDisconnectRequest):
         "status": "crew_reconnected",
         "crew_id": body.crew_id,
         "message": (
-            f"AI-Crew {body.crew_id} reconnecting. Temporal replaying — crew will resume delivery."
+            f"AI-Driver {body.crew_id} reconnecting. "
+            f"Temporal replaying — crew will resume delivery."
         ),
     }
 

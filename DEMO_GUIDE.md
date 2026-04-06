@@ -8,7 +8,7 @@ This guide is for anyone presenting the Meltdown demo. It covers setup, the one-
 
 **Requirements:**
 - Temporal CLI running: `temporal server start-dev`
-- `.env` with `GOOGLE_API_KEY` set (Gemini). Maps and CSE keys are optional — demo works without them.
+- `.env` with `GOOGLE_API_KEY` set (Gemini). Maps and CSE keys optional. Without API keys, mock activities are registered at startup — deterministic data, no silent fallbacks.
 - `./run.sh` (or `make run`) started, browser open at http://localhost:8080
 - Temporal UI open at http://localhost:8233 (optional but great for showing workflow history)
 
@@ -41,6 +41,14 @@ Use this framing at the start of the talk before any demo:
 - In this demo: Fleet Agent, Customer Agent, and Resolver are all LLM Agents — each calls Gemini. The outer pipeline (`create_order_assignment_agent`) is an Orchestrator Agent — it sequences them with no LLM of its own
 - Each agent can use tools (Maps, Search, custom functions)
 - ADK manages the multi-turn reasoning loop — the developer just defines the agents and wires them together
+
+**What each agent specifically reasons about:**
+
+| Agent | What it evaluates | Tools it calls |
+|-------|-------------------|----------------|
+| **Fleet Agent** | Crew positions, free capacity slots, driving ETAs to destination, crew disconnect status | `tool_get_fleet_status`, `tool_get_route_info` (Google Maps Directions) |
+| **Customer Agent** | VIP vs standard priority, deadline tightness, hotel events (conferences, galas, pool parties), servings/guest count | `tool_get_order_priorities`, `tool_search_hotel_context` (Google Custom Search) |
+| **Resolver** | Synthesizes both assessments, compensates if either agent is offline, picks final crew and submits structured assignment | `tool_submit_assignment`, `tool_publish_agent_event` |
 
 ---
 
@@ -98,14 +106,14 @@ The two connect through signals in both directions:
 ```
 New order arrives
   → MeltdownDemoWorkflow builds CrewSnapshots from workflow state
-  → runs assignment agents with snapshots as input → "give this to AI-Crew 2"
+  → runs assignment agents with snapshots as input → "give this to AI-Driver 2"
   → updates self._crew_orders, sends add_order signal to CrewRouteWorkflow
   → CrewRouteWorkflow executes the delivery
   → on completion, signals parent with order_delivered
 ```
 
 The key design principles:
-- **Child workflows give you fault isolation.** Each crew runs independently. If AI-Crew 1 hits an error, 2 and 3 keep running.
+- **Child workflows give you fault isolation.** Each crew runs independently. If AI-Driver 1 hits an error, 2 and 3 keep running.
 - **Workflows own state, activities are pure.** Activities receive everything they need as inputs — they never read shared state for decision-making. `FleetState` is a write-only UI projection.
 - **Disconnect flows through Temporal.** API endpoints send signals only. The workflow handles cancellation, waiting, and syncing state to the UI via activities.
 
@@ -209,6 +217,12 @@ def create_agents_worker(client: Client) -> Worker:
 
 `GoogleAdkPlugin` only needs to be registered on the worker that runs ADK activities — the delivery and workflows workers don't need it.
 
+### Mock mode — no inline fallbacks
+
+When API keys are not set, the worker registers mock activity implementations from [`agent_fleet/mock_activities.py`](agent_fleet/mock_activities.py) instead of the real ones. Same Temporal activity names, deterministic data. The decision happens once at worker startup in `_get_api_activities()` — not at runtime with try/except inside each activity.
+
+This matters for the demo narrative: real activities let failures propagate to Temporal's retry mechanism. If the Google Maps API returns an error, it shows up as a failed activity in the Temporal UI — retried with backoff — exactly as it would in production. Mock mode is an explicit configuration choice, not a hidden fallback that masks failures.
+
 ### What this would look like without Temporal
 
 Without Temporal, the same orchestration would require:
@@ -237,9 +251,9 @@ In this demo, the workflows are the source of truth for all operational state �
 
 **What happens automatically:**
 1. Each order triggers multi-agent reasoning — watch the Agent Reasoning panel
-2. Fleet Agent scans crew positions and capacity, recommends the closest available crew
-3. Customer Agent evaluates priority — Mandalay Bay orders are always VIP
-4. Resolver synthesizes and assigns the order to a crew
+2. Fleet Agent calls `tool_get_fleet_status` and `tool_get_route_info` — scans crew positions, free capacity slots, and driving ETAs. Recommends the closest available crew.
+3. Customer Agent calls `tool_get_order_priorities` and `tool_search_hotel_context` — evaluates VIP tier, deadline pressure, hotel events (conferences, galas), and guest count. Mandalay Bay orders are always VIP.
+4. Resolver synthesizes both assessments and calls `tool_submit_assignment` — picks the best crew and explains why
 5. Crews continuously pick up from Frosty's and deliver to hotels, looping back for more
 
 **What to say:**
@@ -264,8 +278,8 @@ In this demo, the workflows are the source of truth for all operational state �
 **What to say:**
 > "When we disconnect the crew, the API sends a signal — nothing else. The crew's child workflow receives the signal, cancels the running navigation activity via a cancellation scope, and waits. No polling, no shared state flags. When we reconnect, another signal arrives, the workflow resumes, and the activity restarts. Everything flows through Temporal — the API is just a signal relay."
 
-**What you'll see in Temporal UI** (`route-ai-crew-X` workflow → History tab):
-- Open the child workflow for the disconnected crew (search `route-ai-crew-1`, `route-ai-crew-2`, or `route-ai-crew-3`)
+**What you'll see in Temporal UI** (`route-ai-driver-X` workflow → History tab):
+- Open the child workflow for the disconnected crew (search `route-ai-driver-1`, `route-ai-driver-2`, or `route-ai-driver-3`)
 - A `WorkflowExecutionSignaled` event with signal name `crew_disconnected` — the workflow received the signal
 - The `navigate_to` activity shows `ActivityTaskCancelled` — the workflow's cancellation scope cancelled it
 - A `sync_crew_disconnect` activity completes — the workflow pushed disconnect state to the UI via an activity

@@ -45,7 +45,7 @@ async def test_navigate_to_interpolates_position(env: ActivityEnvironment):
     # Register an order so navigate_to can update its status
     await env.run(generate_order, GenerateOrderInput(order_number=1))
     inp = NavigateInput(
-        crew_id="ai-crew-1",
+        crew_id="ai-driver-1",
         order_id="order-1",
         target_lat=36.10,
         target_lng=-115.17,
@@ -60,7 +60,7 @@ async def test_navigate_to_interpolates_position(env: ActivityEnvironment):
     assert result.final_lng == pytest.approx(-115.17, abs=0.01)
 
     # Crew should be at target position
-    lat, lng = await fleet.get_crew_position("ai-crew-1")
+    lat, lng = await fleet.get_crew_position("ai-driver-1")
     assert lat == pytest.approx(36.10, abs=0.01)
     assert lng == pytest.approx(-115.17, abs=0.01)
 
@@ -68,15 +68,15 @@ async def test_navigate_to_interpolates_position(env: ActivityEnvironment):
 async def test_pickup_orders_sets_status(env: ActivityEnvironment):
     # Generate and register an order first
     await env.run(generate_order, GenerateOrderInput(order_number=1))
-    await fleet.assign_order_to_crew("ai-crew-1", "order-1")
+    await fleet.assign_order_to_crew("ai-driver-1", "order-1")
 
     result = await env.run(
         pickup_orders,
-        PickupInput(crew_id="ai-crew-1", order_ids=["order-1"]),
+        PickupInput(crew_id="ai-driver-1", order_ids=["order-1"]),
     )
     assert result.success is True
 
-    c = await fleet.get_crew("ai-crew-1")
+    c = await fleet.get_crew("ai-driver-1")
     assert c.status == CrewStatus.PICKING_UP
 
     o = await fleet.get_order("order-1")
@@ -85,22 +85,22 @@ async def test_pickup_orders_sets_status(env: ActivityEnvironment):
 
 async def test_deliver_order_sets_status(env: ActivityEnvironment):
     await env.run(generate_order, GenerateOrderInput(order_number=1))
-    await fleet.assign_order_to_crew("ai-crew-1", "order-1")
+    await fleet.assign_order_to_crew("ai-driver-1", "order-1")
     await env.run(
         pickup_orders,
-        PickupInput(crew_id="ai-crew-1", order_ids=["order-1"]),
+        PickupInput(crew_id="ai-driver-1", order_ids=["order-1"]),
     )
 
     result = await env.run(
         deliver_order,
-        DeliverInput(crew_id="ai-crew-1", order_id="order-1"),
+        DeliverInput(crew_id="ai-driver-1", order_id="order-1"),
     )
     assert result.success is True
 
     o = await fleet.get_order("order-1")
     assert o.status == OrderStatus.DELIVERED
 
-    c = await fleet.get_crew("ai-crew-1")
+    c = await fleet.get_crew("ai-driver-1")
     assert "order-1" not in c.current_orders
 
 
@@ -108,13 +108,13 @@ async def test_sync_crew_disconnect(env: ActivityEnvironment):
     # Disconnect a crew via the sync activity
     await env.run(
         sync_crew_disconnect,
-        SyncCrewDisconnectInput(crew_id="ai-crew-1", disconnected=True),
+        SyncCrewDisconnectInput(crew_id="ai-driver-1", disconnected=True),
     )
-    assert await fleet.is_crew_disconnected("ai-crew-1") is True
+    assert await fleet.is_crew_disconnected("ai-driver-1") is True
 
     # Reconnect
     await env.run(
         sync_crew_disconnect,
-        SyncCrewDisconnectInput(crew_id="ai-crew-1", disconnected=False),
+        SyncCrewDisconnectInput(crew_id="ai-driver-1", disconnected=False),
     )
-    assert await fleet.is_crew_disconnected("ai-crew-1") is False
+    assert await fleet.is_crew_disconnected("ai-driver-1") is False
