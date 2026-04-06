@@ -7,19 +7,23 @@ Order assignment pipeline:
 - Assignment Resolver: synthesizes both and submits a structured driver assignment
 
 Architecture:
-- ADK agents run inside a Temporal activity (reason_about_assignment).
-  The activity creates an InMemorySessionService and Runner, then streams
-  the agent pipeline to completion. Tool functions are called as plain
-  async functions — no Temporal activity wrapping needed since we're
-  already inside an activity.
+- Agent execution happens inline in the workflow via TemporalModel + activity_tool.
+  Each LLM call is routed through an invoke_model activity (via TemporalModel),
+  and each tool call is its own Temporal activity (via activity_tool wrappers).
 - The resolver agent calls tool_submit_assignment to write structured output
-  into ADK session state. The activity reads it back after the runner completes.
+  into ADK session state. The workflow reads it back after the runner completes.
 """
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from google.adk.agents import Agent, ParallelAgent, SequentialAgent
 from google.adk.tools import ToolContext
+from temporalio.common import RetryPolicy
+from temporalio.contrib.google_adk_agents import TemporalModel
+from temporalio.contrib.google_adk_agents.workflow import activity_tool
+from temporalio.workflow import ActivityConfig
 
 from agent_fleet.activities import (
     tool_get_fleet_status,
@@ -29,6 +33,49 @@ from agent_fleet.activities import (
     tool_search_hotel_context,
 )
 from agent_fleet.config import DEFAULT_MODEL
+from agent_fleet.queues import AGENTS_QUEUE
+
+_TOOL_RETRY = RetryPolicy(
+    initial_interval=timedelta(seconds=1),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(seconds=30),
+    maximum_attempts=5,
+)
+
+
+# --- Activity-backed tools (each tool call becomes a Temporal activity) ---
+
+_fleet_status_tool = activity_tool(
+    tool_get_fleet_status,
+    task_queue=AGENTS_QUEUE,
+    start_to_close_timeout=timedelta(seconds=10),
+    retry_policy=_TOOL_RETRY,
+)
+_order_priorities_tool = activity_tool(
+    tool_get_order_priorities,
+    task_queue=AGENTS_QUEUE,
+    start_to_close_timeout=timedelta(seconds=10),
+    retry_policy=_TOOL_RETRY,
+)
+_publish_event_tool = activity_tool(
+    tool_publish_agent_event,
+    task_queue=AGENTS_QUEUE,
+    start_to_close_timeout=timedelta(seconds=10),
+    retry_policy=_TOOL_RETRY,
+)
+_route_info_tool = activity_tool(
+    tool_get_route_info,
+    task_queue=AGENTS_QUEUE,
+    start_to_close_timeout=timedelta(seconds=15),
+    retry_policy=_TOOL_RETRY,
+)
+_hotel_search_tool = activity_tool(
+    tool_search_hotel_context,
+    task_queue=AGENTS_QUEUE,
+    start_to_close_timeout=timedelta(seconds=15),
+    retry_policy=_TOOL_RETRY,
+)
+
 
 # --- Order assignment agents ---
 
@@ -58,7 +105,10 @@ def create_assignment_fleet_agent() -> Agent:
     """
     return Agent(
         name="assignment_fleet_agent",
-        model=DEFAULT_MODEL,
+        model=TemporalModel(
+            DEFAULT_MODEL,
+            activity_config=ActivityConfig(task_queue=AGENTS_QUEUE),
+        ),
         description=(
             "Operational fleet specialist for order assignment. Assesses AI-Driver "
             "positions, capacity, cooler status, and ETAs to recommend the best driver."
@@ -78,7 +128,7 @@ def create_assignment_fleet_agent() -> Agent:
             "event_type='assessment' to share your fleet scan results.\n\n"
             "Be concise and decisive — state which driver you recommend and why."
         ),
-        tools=[tool_get_fleet_status, tool_get_route_info, tool_publish_agent_event],
+        tools=[_fleet_status_tool, _route_info_tool, _publish_event_tool],
         output_key="fleet_assessment",
     )
 
@@ -90,7 +140,10 @@ def create_assignment_customer_agent() -> Agent:
     """
     return Agent(
         name="assignment_customer_agent",
-        model=DEFAULT_MODEL,
+        model=TemporalModel(
+            DEFAULT_MODEL,
+            activity_config=ActivityConfig(task_queue=AGENTS_QUEUE),
+        ),
         description=(
             "Customer priority specialist for order assignment. Evaluates order "
             "priority, urgency, deadline pressure, and hotel context."
@@ -109,7 +162,7 @@ def create_assignment_customer_agent() -> Agent:
             "event_type='assessment' to share your priority assessment.\n\n"
             "Be concise — state the priority level and any urgency factors."
         ),
-        tools=[tool_get_order_priorities, tool_search_hotel_context, tool_publish_agent_event],
+        tools=[_order_priorities_tool, _hotel_search_tool, _publish_event_tool],
         output_key="customer_assessment",
     )
 
@@ -121,7 +174,10 @@ def create_assignment_resolver() -> Agent:
     """
     return Agent(
         name="assignment_resolver",
-        model=DEFAULT_MODEL,
+        model=TemporalModel(
+            DEFAULT_MODEL,
+            activity_config=ActivityConfig(task_queue=AGENTS_QUEUE),
+        ),
         description=(
             "Assignment coordinator. Synthesizes fleet and customer assessments "
             "to pick the best driver for a new order."
@@ -142,7 +198,7 @@ def create_assignment_resolver() -> Agent:
             "event_type='plan' to announce the assignment.\n\n"
             "Be decisive. Pick the driver and explain why in one sentence."
         ),
-        tools=[tool_publish_agent_event, tool_submit_assignment],
+        tools=[_publish_event_tool, tool_submit_assignment],
     )
 
 

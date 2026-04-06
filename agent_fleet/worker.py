@@ -33,6 +33,7 @@ from agent_fleet.activities import (
     navigate_to,
     pickup_orders,
     publish_agent_event,
+    register_assignment,
     sync_driver_disconnect,
     sync_driver_recovery_complete,
     tool_get_fleet_status,
@@ -105,12 +106,20 @@ def _get_api_activities() -> dict:
 
 
 def create_workflow_worker(client: Client) -> Worker:
-    """Workflow-only worker — no activities, dedicated to replay."""
-    return Worker(
-        client,
+    """Workflow-only worker — no activities, dedicated to replay.
+
+    GoogleAdkPlugin is needed here for sandbox passthroughs (google.adk,
+    google.genai) and deterministic runtime (uuid, time) during replay.
+    """
+    kwargs: dict = dict(
         task_queue=WORKFLOWS_QUEUE,
         workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow],
     )
+    if not MOCK_MODE:
+        from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
+
+        kwargs["plugins"] = [GoogleAdkPlugin()]
+    return Worker(client, **kwargs)
 
 
 def create_delivery_worker(client: Client) -> Worker:
@@ -137,22 +146,31 @@ def create_delivery_worker(client: Client) -> Worker:
 
 
 def create_agents_worker(client: Client) -> Worker:
-    """ADK/LLM activities — rate-limited."""
+    """ADK/LLM activities — rate-limited.
+
+    GoogleAdkPlugin registers the invoke_model activity that TemporalModel
+    routes LLM calls to. Only needed in live mode.
+    """
     api_acts = _get_api_activities()
     activities = [
         api_acts["reason_about_assignment"],
+        register_assignment,
         tool_get_fleet_status,
         tool_get_order_priorities,
         tool_publish_agent_event,
         api_acts["tool_get_route_info"],
         api_acts["tool_search_hotel_context"],
     ]
-    return Worker(
-        client,
+    kwargs: dict = dict(
         task_queue=AGENTS_QUEUE,
         activities=activities,
         max_concurrent_activities=5,
     )
+    if not MOCK_MODE:
+        from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
+
+        kwargs["plugins"] = [GoogleAdkPlugin()]
+    return Worker(client, **kwargs)
 
 
 async def create_worker(client: Client) -> list[Worker]:

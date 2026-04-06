@@ -19,6 +19,10 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai.types import Content, Part
+
     from agent_fleet.activities import (
         deliver_order,
         execute_customer_change,
@@ -28,9 +32,12 @@ with workflow.unsafe.imports_passed_through():
         pickup_orders,
         publish_agent_event,
         reason_about_assignment,
+        register_assignment,
         sync_driver_disconnect,
         sync_driver_recovery_complete,
     )
+    from agent_fleet.agents import create_order_assignment_agent
+    from agent_fleet.config import MOCK_MODE as _MOCK_MODE
     from agent_fleet.locations import WAREHOUSE
     from agent_fleet.models import (
         AgentDisconnectInput,
@@ -50,6 +57,7 @@ with workflow.unsafe.imports_passed_through():
         PickupInput,
         PublishAgentEventInput,
         ReasonAboutAssignmentInput,
+        ReasonAboutAssignmentOutput,
         SyncDriverDisconnectInput,
     )
     from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE
@@ -557,7 +565,81 @@ class MeltdownDemoWorkflow:
             except Exception as e:
                 results.append(f"{driver_id}: {e}")
 
-        return f"Meltdown demo complete. Results: {results}"
+        mode = "ADK" if not _MOCK_MODE else "mock"
+        return f"Meltdown demo complete ({mode}). Results: {results}"
+
+    # --- ADK inline assignment (live mode) ---
+
+    async def _run_adk_assignment(
+        self, inp: ReasonAboutAssignmentInput
+    ) -> ReasonAboutAssignmentOutput | None:
+        """Run ADK agents inline in the workflow. Returns None on failure.
+
+        Each LLM call and tool call is a separate Temporal activity via
+        TemporalModel + activity_tool. This gives per-call durability and
+        visibility in the Temporal UI.
+        """
+        workflow.logger.info(f"Running ADK assignment for {inp.order_id}")
+        agent = create_order_assignment_agent()
+        if agent is None:
+            workflow.logger.warning("ADK agent creation returned None — check ADK imports")
+            return None
+
+        session_service = InMemorySessionService()
+        runner = Runner(
+            agent=agent,
+            app_name="meltdown_demo",
+            session_service=session_service,
+        )
+
+        session = await session_service.create_session(
+            app_name="meltdown_demo",
+            user_id="workflow",
+        )
+
+        prompt = (
+            f"NEW ORDER — assign to the best driver:\n"
+            f"Order ID: {inp.order_id}\n"
+            f"Hotel: {inp.hotel}\n"
+            f"Event: {inp.event}\n"
+            f"Priority: {inp.priority}\n"
+            f"Servings: {inp.servings}\n"
+            f"Deadline: {inp.deadline_minutes} minutes\n"
+            f"Coordinates: ({inp.delivery_lat}, {inp.delivery_lng})\n\n"
+            f"Assess fleet capacity and customer priority, then the resolver "
+            f"MUST call tool_submit_assignment with the driver_id and reasoning."
+        )
+
+        events_count = 0
+        try:
+            async for event in runner.run_async(
+                user_id="workflow",
+                session_id=session.id,
+                new_message=Content(parts=[Part(text=prompt)]),
+            ):
+                events_count += 1
+        except Exception as e:
+            workflow.logger.error(f"ADK assignment failed ({type(e).__name__}): {e}")
+            return None
+
+        updated_session = await session_service.get_session(
+            app_name="meltdown_demo",
+            user_id="workflow",
+            session_id=session.id,
+        )
+
+        assignment_dict = (updated_session.state or {}).get("assignment")
+        if not assignment_dict:
+            workflow.logger.warning("ADK assignment resolver did not submit an assignment")
+            return None
+
+        workflow.logger.info(
+            f"ADK assignment complete: {events_count} events, driver={assignment_dict['driver_id']}"
+        )
+        return ReasonAboutAssignmentOutput(
+            driver_id=assignment_dict["driver_id"],
+            reasoning_summary=assignment_dict.get("reasoning_summary", "ADK assignment"),
+        )
 
     # --- Order generation loop ---
 
@@ -597,14 +679,32 @@ class MeltdownDemoWorkflow:
                 disconnected_agents=list(self._disconnected_agents),
             )
 
-            assignment = await workflow.execute_activity(
-                reason_about_assignment,
-                assignment_input,
-                task_queue=AGENTS_QUEUE,
-                summary=f"Fleet + Customer + Resolver — assign {order.order_id}",
-                start_to_close_timeout=timedelta(seconds=60),
-                retry_policy=FAST_RETRY,
-            )
+            assignment = None
+
+            # Live mode: run ADK agents inline (per-call Temporal activities)
+            if not _MOCK_MODE:
+                assignment = await self._run_adk_assignment(assignment_input)
+                if assignment is not None:
+                    # ADK succeeded — register the assignment in fleet state
+                    await workflow.execute_activity(
+                        register_assignment,
+                        args=[assignment.driver_id, order.order_id],
+                        task_queue=AGENTS_QUEUE,
+                        summary=(f"Resolver — register {order.order_id} → {assignment.driver_id}"),
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=FAST_RETRY,
+                    )
+
+            # Fallback: activity-based assignment (mock mode, or ADK failure)
+            if assignment is None:
+                assignment = await workflow.execute_activity(
+                    reason_about_assignment,
+                    assignment_input,
+                    task_queue=AGENTS_QUEUE,
+                    summary=f"Fleet + Customer + Resolver — assign {order.order_id}",
+                    start_to_close_timeout=timedelta(seconds=60),
+                    retry_policy=FAST_RETRY,
+                )
 
             # Update workflow-owned driver state
             driver_id = assignment.driver_id

@@ -354,6 +354,13 @@ async def reason_about_assignment(
 
 
 @activity.defn
+async def register_assignment(driver_id: str, order_id: str) -> str:
+    """Register an ADK-decided assignment in fleet state (UI projection)."""
+    await fleet.assign_order_to_driver(driver_id, order_id)
+    return f"Assigned {order_id} to {driver_id}"
+
+
+@activity.defn
 async def navigate_to(inp: NavigateInput) -> NavigateOutput:
     """
     Simulate AI-Driver navigation by interpolating position over N steps.
