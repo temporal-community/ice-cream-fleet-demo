@@ -715,7 +715,17 @@ class MeltdownDemoWorkflow:
             user_id="workflow",
         )
 
+        # Build agent status context
+        agent_status_lines = []
+        if inp.disconnected_agents:
+            for agent in inp.disconnected_agents:
+                agent_status_lines.append(
+                    f"⚠️ {agent} is OFFLINE — compensate with available data."
+                )
+        agent_context = "\n".join(agent_status_lines) + "\n\n" if agent_status_lines else ""
+
         prompt = (
+            f"{agent_context}"
             f"NEW ORDER — assign to the best driver:\n"
             f"Order ID: {inp.order_id}\n"
             f"Hotel: {inp.hotel}\n"
