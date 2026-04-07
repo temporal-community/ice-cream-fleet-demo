@@ -7,7 +7,10 @@ This guide is for anyone presenting the Meltdown demo. It covers setup, the one-
 ## Before You Start
 
 **Requirements:**
-- `.env` with `GOOGLE_API_KEY` set (Gemini). `GOOGLE_MAPS_API_KEY` optional (for live route data). `GOOGLE_CSE_ID` needed alongside `GOOGLE_API_KEY` for hotel context search (set up at [programmablesearchengine.google.com](https://programmablesearchengine.google.com)). Without `GOOGLE_API_KEY`, the entire demo runs in mock mode.
+- `.env` with two API keys (Google requires separate keys for Gemini vs Cloud APIs):
+  - `GOOGLE_API_KEY` — Gemini key, restricted to Generative Language API. Without it, the demo runs in mock mode.
+  - `GOOGLE_MAPS_API_KEY` — Maps + Search key, restricted to Directions API + Custom Search API.
+  - `GOOGLE_CSE_ID` — Custom Search Engine ID from [programmablesearchengine.google.com](https://programmablesearchengine.google.com).
 - `./run.sh` (or `make run`) started — this starts the Temporal dev server, worker process, and server process automatically. Browser open at http://localhost:8080
 - Temporal UI open at http://localhost:8233 (optional but great for showing workflow history)
 

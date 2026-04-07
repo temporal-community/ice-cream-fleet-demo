@@ -52,7 +52,9 @@ and FastAPI server (`python -m agent_fleet.server`). No manual Temporal setup ne
 - Dataclass models for all Temporal payloads (`models.py`)
 - Activities and workflows in separate files
 - Mock mode in `agent_fleet/mock/` when `GOOGLE_API_KEY` is not set
-- `GOOGLE_CSE_ID` required for Custom Search (set up at programmablesearchengine.google.com)
+- Two API keys required: `GOOGLE_API_KEY` (Gemini, Generative Language API) and
+  `GOOGLE_MAPS_API_KEY` (Directions API + Custom Search API) — cannot be combined
+- `GOOGLE_CSE_ID` for Custom Search Engine (programmablesearchengine.google.com)
 - `DEFAULT_MODEL` defaults to `gemini-2.5-flash` (swappable via env)
 - Random order generation from 3 Las Vegas venues (`locations.py`)
 

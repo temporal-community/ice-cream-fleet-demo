@@ -14,7 +14,7 @@ import math
 import httpx
 from temporalio import activity
 
-from agent_fleet.config import GOOGLE_API_KEY, GOOGLE_CSE_ID, GOOGLE_MAPS_API_KEY
+from agent_fleet.config import GOOGLE_MAPS_API_KEY
 from agent_fleet.locations import generate_random_order
 from agent_fleet.models import (
     DeliverInput,
@@ -203,43 +203,6 @@ async def tool_get_route_info(
         f"  ETA_MINUTES: {eta_minutes}\n"
         f"  Key directions:\n{steps_text}"
     )
-
-
-@activity.defn
-async def tool_search_hotel_context(hotel_name: str) -> str:
-    """Search for live context about a Las Vegas hotel — current events, VIP bookings, reputation.
-
-    Use this to understand delivery urgency for a specific hotel destination.
-    Failures propagate to Temporal's retry mechanism.
-
-    Args:
-        hotel_name: Name of the hotel (e.g. "MGM Grand", "Caesars Palace", "Mandalay Bay")
-    """
-
-    query = f"{hotel_name} Las Vegas current events today"
-    url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        "key": GOOGLE_API_KEY,
-        "cx": GOOGLE_CSE_ID,
-        "q": query,
-        "num": 3,
-    }
-
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        resp = await client.get(url, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-
-    items = data.get("items", [])
-    if not items:
-        return f"No search results found for {hotel_name}."
-
-    results = []
-    for item in items[:3]:
-        title = item.get("title", "")
-        snippet = item.get("snippet", "")
-        results.append(f"- {title}: {snippet}")
-    return f"Live search results for {hotel_name}:\n" + "\n".join(results)
 
 
 # --- Core delivery activities ---

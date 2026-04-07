@@ -112,9 +112,11 @@ Mock mode is completely separate from live code. The `agent_fleet/mock/` folder 
 
 - Python 3.11+
 - [Temporal CLI](https://docs.temporal.io/cli) (`brew install temporal`)
-- Google Gemini API key (`GOOGLE_API_KEY`) — required for live mode; without it the entire demo runs in mock mode
-- Google Maps API key (`GOOGLE_MAPS_API_KEY`) — optional, must be a Maps-enabled key; live mode uses it for route polylines and ETAs
-- Google Custom Search Engine ID (`GOOGLE_CSE_ID`) — needed alongside `GOOGLE_API_KEY` for hotel context search; set up at [programmablesearchengine.google.com](https://programmablesearchengine.google.com)
+- Google Gemini API key (`GOOGLE_API_KEY`) — required for live mode; without it the entire demo runs in mock mode. Restricted to **Generative Language API**.
+- Google Maps + Search API key (`GOOGLE_MAPS_API_KEY`) — used for route polylines, ETAs, and hotel context search. Restricted to **Directions API** + **Custom Search API**. This must be a separate key from `GOOGLE_API_KEY` because the Generative Language API cannot share a key with standard Google Cloud APIs.
+- Google Custom Search Engine ID (`GOOGLE_CSE_ID`) — identifies which search engine to use for hotel context. Set up at [programmablesearchengine.google.com](https://programmablesearchengine.google.com) with relevant hotel/Vegas sites.
+
+> **Note:** Google requires two separate API keys because the Generative Language API (Gemini) and standard Cloud APIs (Maps, Custom Search) have different key restrictions and cannot be combined on a single key.
 
 The startup decision is binary: `GOOGLE_API_KEY` set → live workers (ADK + all API activities), not set → mock workers (deterministic data, no LLM calls). Default model is `gemini-2.5-flash` (override with `DEFAULT_MODEL` env var).
 

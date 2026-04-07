@@ -33,7 +33,6 @@ from agent_fleet.mock.activities import (
     mock_get_route_polyline,
     mock_reason_about_assignment,
     mock_tool_get_route_info,
-    mock_tool_search_hotel_context,
 )
 from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE, WORKFLOWS_QUEUE
 from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow, OrderGenerationWorkflow
@@ -94,7 +93,6 @@ def create_agents_worker(client: Client) -> Worker:
             tool_get_order_priorities,
             tool_publish_agent_event,
             mock_tool_get_route_info,
-            mock_tool_search_hotel_context,
             mock_reason_about_assignment,
         ],
         max_concurrent_activities=5,

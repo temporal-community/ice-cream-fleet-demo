@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from google.adk.agents import Agent, ParallelAgent, SequentialAgent
-from google.adk.tools import ToolContext
+from google.adk.tools import ToolContext, google_search
 from temporalio.common import RetryPolicy
 from temporalio.contrib.google_adk_agents import TemporalModel
 from temporalio.workflow import ActivityConfig
@@ -30,7 +30,6 @@ from agent_fleet.activities import (
     tool_get_order_priorities,
     tool_get_route_info,
     tool_publish_agent_event,
-    tool_search_hotel_context,
 )
 from agent_fleet.config import DEFAULT_MODEL
 from agent_fleet.queues import AGENTS_QUEUE
@@ -65,12 +64,6 @@ _publish_event_tool = activity_tool(
 )
 _route_info_tool = activity_tool(
     tool_get_route_info,
-    task_queue=AGENTS_QUEUE,
-    start_to_close_timeout=timedelta(seconds=15),
-    retry_policy=_TOOL_RETRY,
-)
-_hotel_search_tool = activity_tool(
-    tool_search_hotel_context,
     task_queue=AGENTS_QUEUE,
     start_to_close_timeout=timedelta(seconds=15),
     retry_policy=_TOOL_RETRY,
@@ -152,7 +145,7 @@ def create_assignment_customer_agent() -> Agent:
             "You are the Customer Relations AI for Meltdown Ice Cream Delivery. "
             "A new order has arrived and you need to assess its priority and urgency.\n\n"
             "Call tool_get_order_priorities to check order details. "
-            "Call tool_search_hotel_context to get context about the delivery hotel.\n\n"
+            "Use Google Search to find current events at the delivery hotel.\n\n"
             "Assess:\n"
             "- Is this a VIP or standard order?\n"
             "- How tight is the deadline?\n"
@@ -162,7 +155,11 @@ def create_assignment_customer_agent() -> Agent:
             "event_type='assessment' to share your priority assessment.\n\n"
             "Be concise — state the priority level and any urgency factors."
         ),
-        tools=[_order_priorities_tool, _hotel_search_tool, _publish_event_tool],
+        tools=[
+            _order_priorities_tool,
+            google_search,
+            _publish_event_tool,
+        ],
         output_key="customer_assessment",
     )
 

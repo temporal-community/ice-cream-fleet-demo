@@ -28,7 +28,6 @@ from agent_fleet.locations import VENUES
 from agent_fleet.mock.activities import (
     mock_get_route_polyline,
     mock_tool_get_route_info,
-    mock_tool_search_hotel_context,
 )
 from agent_fleet.models import (
     CustomerChangeInput,
@@ -170,7 +169,6 @@ async def test_meltdown_demo_completes(env: WorkflowEnvironment):
         activities=[
             register_assignment,
             mock_tool_get_route_info,
-            mock_tool_search_hotel_context,
         ],
         max_concurrent_activities=5,
         plugins=[GoogleAdkPlugin()],
@@ -236,7 +234,6 @@ async def test_meltdown_demo_handles_customer_change(env: WorkflowEnvironment):
         activities=[
             register_assignment,
             mock_tool_get_route_info,
-            mock_tool_search_hotel_context,
         ],
         max_concurrent_activities=5,
         plugins=[GoogleAdkPlugin()],

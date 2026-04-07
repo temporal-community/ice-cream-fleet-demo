@@ -36,7 +36,6 @@ from agent_fleet.activities import (
     tool_get_order_priorities,
     tool_get_route_info,
     tool_publish_agent_event,
-    tool_search_hotel_context,
 )
 from agent_fleet.config import TEMPORAL_ADDRESS
 from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE, WORKFLOWS_QUEUE
@@ -100,7 +99,6 @@ def create_agents_worker(client: Client) -> Worker:
             tool_get_order_priorities,
             tool_publish_agent_event,
             tool_get_route_info,
-            tool_search_hotel_context,
         ],
         max_concurrent_activities=5,
         plugins=[GoogleAdkPlugin()],
