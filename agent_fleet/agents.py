@@ -19,7 +19,8 @@ from __future__ import annotations
 from datetime import timedelta
 
 from google.adk.agents import Agent, ParallelAgent, SequentialAgent
-from google.adk.tools import ToolContext, google_search
+from google.adk.tools import ToolContext
+from google.adk.tools.google_search_tool import GoogleSearchTool
 from temporalio.common import RetryPolicy
 from temporalio.contrib.google_adk_agents import TemporalModel
 from temporalio.workflow import ActivityConfig
@@ -157,7 +158,7 @@ def create_assignment_customer_agent() -> Agent:
         ),
         tools=[
             _order_priorities_tool,
-            google_search,
+            GoogleSearchTool(bypass_multi_tools_limit=True),
             _publish_event_tool,
         ],
         output_key="customer_assessment",

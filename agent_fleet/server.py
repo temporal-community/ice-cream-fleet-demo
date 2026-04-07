@@ -38,6 +38,7 @@ from agent_fleet.models import (
     MeltdownDemoInput,
 )
 from agent_fleet.queues import WORKFLOWS_QUEUE
+from agent_fleet.simulation import fleet
 from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow
 
 logging.basicConfig(level=logging.INFO)
@@ -128,6 +129,7 @@ async def start_demo():
 async def reset_demo():
     """Cancel running workflows and reset state."""
     await _cancel_running_workflows()
+    await fleet.reset()
     return {"status": "reset"}
 
 
@@ -144,8 +146,10 @@ async def disconnect_driver(body: DriverDisconnectRequest):
     if _temporal_client is None:
         return {"error": "Temporal client not connected"}
 
-    # Signal both parent orchestrator and the driver's child workflow.
-    # The workflow handles the cancellation and syncs state to FleetState via activities.
+    # Update FleetState for frontend display
+    await fleet.disconnect_driver(body.driver_id)
+
+    # Signal both parent orchestrator and the driver's child workflow
     try:
         parent = _temporal_client.get_workflow_handle("meltdown-demo")
         await parent.signal(
@@ -176,8 +180,10 @@ async def reconnect_driver(body: DriverDisconnectRequest):
     if _temporal_client is None:
         return {"error": "Temporal client not connected"}
 
-    # Signal both workflows. The child workflow syncs reconnect state to FleetState
-    # and clears the recovery indicator via activities.
+    # Update FleetState for frontend display
+    await fleet.reconnect_driver(body.driver_id)
+
+    # Signal both workflows
     try:
         parent = _temporal_client.get_workflow_handle("meltdown-demo")
         await parent.signal(
@@ -327,69 +333,37 @@ async def toggle_escalation():
 # --- State query endpoints ---
 
 
-async def _build_snapshot_from_queries() -> dict:
-    """Build frontend state by querying Temporal workflows instead of FleetState."""
-    empty = {
-        "drivers": {},
-        "orders": {},
-        "agent_events": [],
-        "event_log": [],
-        "agent_health": {},
-    }
-    if _temporal_client is None:
-        return empty
+async def _build_snapshot() -> dict:
+    """Build frontend state from FleetState (UI projection written by activities).
 
-    try:
-        parent = _temporal_client.get_workflow_handle("meltdown-demo")
-        parent_status = await parent.query(MeltdownDemoWorkflow.get_status)
-    except Exception:
-        return empty
+    Temporal queries are used for structural state that workflows own
+    (disconnect status, order assignments). FleetState provides high-frequency
+    UI data (positions, path trails, agent events) that activities update
+    during execution.
+    """
+    snapshot = await fleet.snapshot()
 
-    # Query each driver workflow
-    drivers = {}
-    for i in range(1, 4):
-        driver_id = f"ai-driver-{i}"
-        try:
-            handle = _temporal_client.get_workflow_handle(f"route-{driver_id}")
-            driver_status = await handle.query(DriverRouteWorkflow.get_status)
-            drivers[driver_id] = {
-                "driver_id": driver_id,
-                "position": {"lat": driver_status["lat"], "lng": driver_status["lng"]},
-                "status": driver_status["status"],
-                "current_orders": driver_status["current_orders"],
-                "path_history": driver_status["path_history"],
-                "disconnected": driver_status["is_disconnected"],
-                "recovering": driver_status["is_recovering"],
-                "capacity": 3,
-                "battery_pct": 100,
-            }
-        except Exception:
-            # Workflow not started yet
-            drivers[driver_id] = {
-                "driver_id": driver_id,
-                "position": {"lat": 36.1040, "lng": -115.1530},
-                "status": "idle",
-                "current_orders": [],
-                "path_history": [],
-                "disconnected": False,
-                "recovering": False,
-                "capacity": 3,
-                "battery_pct": 100,
-            }
+    # Overlay disconnect/recovery state from workflow queries (source of truth)
+    if _temporal_client is not None:
+        for i in range(1, 4):
+            driver_id = f"ai-driver-{i}"
+            try:
+                handle = _temporal_client.get_workflow_handle(f"route-{driver_id}")
+                status = await handle.query(DriverRouteWorkflow.get_status)
+                if driver_id in snapshot["drivers"]:
+                    d = snapshot["drivers"][driver_id]
+                    d["disconnected"] = status["is_disconnected"]
+                    d["recovering"] = status.get("is_recovering", False)
+            except Exception:
+                pass
 
-    return {
-        "drivers": drivers,
-        "orders": parent_status.get("orders", {}),
-        "agent_events": parent_status.get("agent_events", []),
-        "event_log": [],
-        "agent_health": parent_status.get("agent_health", {}),
-    }
+    return snapshot
 
 
 @app.get("/api/state")
 async def get_state():
     """Get current fleet state by querying Temporal workflows."""
-    return await _build_snapshot_from_queries()
+    return await _build_snapshot()
 
 
 @app.get("/api/locations")
@@ -425,7 +399,7 @@ async def websocket_state(ws: WebSocket):
     last_snapshot: str | None = None
     try:
         while True:
-            snapshot = await _build_snapshot_from_queries()
+            snapshot = await _build_snapshot()
             data = json.dumps(snapshot)
             if data != last_snapshot:
                 await ws.send_text(data)
