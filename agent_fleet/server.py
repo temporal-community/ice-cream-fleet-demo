@@ -25,6 +25,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from temporalio.client import Client
+from temporalio.contrib.pydantic import PydanticPayloadConverter
+from temporalio.converter import DataConverter
 from temporalio.service import RPCError
 
 load_dotenv()
@@ -77,9 +79,6 @@ async def _cancel_running_workflows() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _temporal_client
-    from temporalio.contrib.pydantic import PydanticPayloadConverter
-    from temporalio.converter import DataConverter
-
     _temporal_client = await Client.connect(
         TEMPORAL_ADDRESS,
         data_converter=DataConverter(

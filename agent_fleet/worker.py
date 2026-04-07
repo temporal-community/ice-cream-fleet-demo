@@ -19,6 +19,8 @@ import signal
 
 from temporalio.client import Client
 from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
+from temporalio.contrib.pydantic import PydanticPayloadConverter
+from temporalio.converter import DataConverter
 from temporalio.worker import Worker
 
 from agent_fleet.activities import (
@@ -134,9 +136,6 @@ async def run_worker() -> None:
     )
 
     logger.info(f"Connecting to Temporal at {TEMPORAL_ADDRESS}...")
-    from temporalio.contrib.pydantic import PydanticPayloadConverter
-    from temporalio.converter import DataConverter
-
     client = await Client.connect(
         TEMPORAL_ADDRESS,
         data_converter=DataConverter(
