@@ -1,13 +1,15 @@
 """Integration tests for Temporal workflows using time-skipping test environment.
 
-DriverRouteWorkflow tests use mock activities (no Gemini needed).
-Full MeltdownDemoWorkflow tests require GOOGLE_API_KEY for live ADK.
+DriverRouteWorkflow and OrderGenerationWorkflow are tested with mock
+activities — no API keys needed. These cover the core Temporal patterns:
+signals, activities, cancellation, child workflows.
+
+MeltdownDemoWorkflow requires the full ADK stack (Gemini + GoogleAdkPlugin)
+and is tested manually via ./run.sh.
 """
 
 import asyncio
-import os
 from contextlib import asynccontextmanager
-from datetime import timedelta
 
 import pytest
 from temporalio.testing import WorkflowEnvironment
@@ -22,20 +24,14 @@ from agent_fleet.activities import (
     navigate_to,
     pickup_orders,
     publish_agent_event,
-    register_assignment,
 )
 from agent_fleet.locations import VENUES
-from agent_fleet.mock.activities import (
-    mock_get_route_polyline,
-    mock_tool_get_route_info,
-)
+from agent_fleet.mock.activities import mock_get_route_polyline
 from agent_fleet.models import (
-    CustomerChangeInput,
     DriverRouteInput,
     DriverRouteOrder,
-    MeltdownDemoInput,
 )
-from agent_fleet.queues import AGENTS_QUEUE, DELIVERY_QUEUE, WORKFLOWS_QUEUE
+from agent_fleet.queues import DELIVERY_QUEUE, WORKFLOWS_QUEUE
 from agent_fleet.simulation import fleet
 
 
@@ -47,7 +43,7 @@ async def env():
 
 @asynccontextmanager
 async def run_delivery_workers(env: WorkflowEnvironment):
-    """Start workers for DriverRouteWorkflow tests (no ADK needed)."""
+    """Start workers for delivery workflow tests (no ADK needed)."""
     from agent_fleet.workflows import DriverRouteWorkflow, OrderGenerationWorkflow
 
     workflow_worker = Worker(
@@ -79,7 +75,7 @@ async def test_driver_route_completes_with_signal(env: WorkflowEnvironment):
     """DriverRouteWorkflow receives an order via signal, delivers it, then stops."""
     from agent_fleet.workflows import DriverRouteWorkflow
 
-    venue = VENUES[0]  # MGM Grand
+    venue = VENUES[0]
 
     await fleet.register_order(
         order_id="order-1",
@@ -118,150 +114,43 @@ async def test_driver_route_completes_with_signal(env: WorkflowEnvironment):
         assert "1 deliveries" in result or "completed" in result.lower()
 
 
-@pytest.mark.skipif(
-    not os.environ.get("GOOGLE_API_KEY"),
-    reason="Requires GOOGLE_API_KEY for live ADK agents",
-)
-async def test_meltdown_demo_completes(env: WorkflowEnvironment):
-    """Full demo with live ADK agents — only runs when API key is set."""
-    from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
-    from temporalio.contrib.pydantic import PydanticPayloadConverter
-    from temporalio.converter import DataConverter
+async def test_driver_route_handles_multiple_orders(env: WorkflowEnvironment):
+    """DriverRouteWorkflow processes multiple orders sequentially."""
+    from agent_fleet.workflows import DriverRouteWorkflow
 
-    from agent_fleet.workflows import (
-        DriverRouteWorkflow,
-        MeltdownDemoWorkflow,
-        OrderGenerationWorkflow,
-    )
-
-    # Live mode needs PydanticPayloadConverter for LlmResponse serialization
-    live_client = await env.client.connect(
-        env.client.service_client.config.target_host,
-        data_converter=DataConverter(
-            payload_converter_class=PydanticPayloadConverter,
-        ),
-    )
-
-    workflow_worker = Worker(
-        live_client,
-        task_queue=WORKFLOWS_QUEUE,
-        workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow, OrderGenerationWorkflow],
-        plugins=[GoogleAdkPlugin()],
-    )
-    delivery_worker = Worker(
-        live_client,
-        task_queue=DELIVERY_QUEUE,
-        activities=[
-            generate_order,
-            navigate_to,
-            pickup_orders,
-            deliver_order,
-            execute_customer_change,
-            get_fleet_status,
-            get_order_priorities,
-            publish_agent_event,
-        ],
-        max_concurrent_activities=20,
-    )
-    agents_worker = Worker(
-        live_client,
-        task_queue=AGENTS_QUEUE,
-        activities=[
-            register_assignment,
-            mock_tool_get_route_info,
-        ],
-        max_concurrent_activities=5,
-        plugins=[GoogleAdkPlugin()],
-    )
-
-    async with workflow_worker, delivery_worker, agents_worker:
-        result = await live_client.execute_workflow(
-            MeltdownDemoWorkflow.run,
-            MeltdownDemoInput(escalation_enabled=False, max_orders=2),
-            id="meltdown-demo",
-            task_queue=WORKFLOWS_QUEUE,
-            execution_timeout=timedelta(minutes=10),
+    for i, venue in enumerate(VENUES[:2], 1):
+        await fleet.register_order(
+            order_id=f"order-{i}",
+            hotel=venue["hotel"],
+            label=f"{venue['hotel']} test",
+            priority="standard",
+            servings=40,
+            delivery_coords=venue["coords"],
+            deadline_minutes=30,
         )
-        assert "complete" in result.lower()
+        await fleet.assign_order_to_driver("ai-driver-1", f"order-{i}")
 
-
-@pytest.mark.skipif(
-    not os.environ.get("GOOGLE_API_KEY"),
-    reason="Requires GOOGLE_API_KEY for live ADK agents",
-)
-async def test_meltdown_demo_handles_customer_change(env: WorkflowEnvironment):
-    """Customer change with live ADK — only runs when API key is set."""
-    from temporalio.contrib.google_adk_agents import GoogleAdkPlugin
-    from temporalio.contrib.pydantic import PydanticPayloadConverter
-    from temporalio.converter import DataConverter
-
-    from agent_fleet.workflows import (
-        DriverRouteWorkflow,
-        MeltdownDemoWorkflow,
-        OrderGenerationWorkflow,
-    )
-
-    live_client = await env.client.connect(
-        env.client.service_client.config.target_host,
-        data_converter=DataConverter(
-            payload_converter_class=PydanticPayloadConverter,
-        ),
-    )
-
-    workflow_worker = Worker(
-        live_client,
-        task_queue=WORKFLOWS_QUEUE,
-        workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow, OrderGenerationWorkflow],
-        plugins=[GoogleAdkPlugin()],
-    )
-    delivery_worker = Worker(
-        live_client,
-        task_queue=DELIVERY_QUEUE,
-        activities=[
-            generate_order,
-            navigate_to,
-            pickup_orders,
-            deliver_order,
-            execute_customer_change,
-            get_fleet_status,
-            get_order_priorities,
-            publish_agent_event,
-        ],
-    )
-    agents_worker = Worker(
-        live_client,
-        task_queue=AGENTS_QUEUE,
-        activities=[
-            register_assignment,
-            mock_tool_get_route_info,
-        ],
-        max_concurrent_activities=5,
-        plugins=[GoogleAdkPlugin()],
-    )
-
-    async with workflow_worker, delivery_worker, agents_worker:
-        handle = await live_client.start_workflow(
-            MeltdownDemoWorkflow.run,
-            MeltdownDemoInput(escalation_enabled=False, max_orders=4),
-            id="meltdown-demo",
+    async with run_delivery_workers(env):
+        handle = await env.client.start_workflow(
+            DriverRouteWorkflow.run,
+            DriverRouteInput(driver_id="ai-driver-1"),
+            id="test-route-multi",
             task_queue=WORKFLOWS_QUEUE,
-            execution_timeout=timedelta(minutes=10),
         )
+
+        for i, venue in enumerate(VENUES[:2], 1):
+            await handle.signal(
+                DriverRouteWorkflow.add_order,
+                DriverRouteOrder(
+                    order_id=f"order-{i}",
+                    hotel=venue["hotel"],
+                    delivery_lat=venue["coords"].lat,
+                    delivery_lng=venue["coords"].lng,
+                ),
+            )
 
         await asyncio.sleep(5)
-
-        await handle.signal(
-            MeltdownDemoWorkflow.customer_change,
-            CustomerChangeInput(
-                order_id="order-1",
-                change_type="address_change",
-                new_details="Move to alternate loading bay",
-                new_lat=36.1111,
-                new_lng=-115.1666,
-            ),
-        )
-
-        await handle.signal(MeltdownDemoWorkflow.change_approved, True)
+        await handle.signal(DriverRouteWorkflow.stop)
 
         result = await handle.result()
-        assert "complete" in result.lower()
+        assert "2 deliveries" in result
