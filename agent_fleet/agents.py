@@ -22,9 +22,9 @@ from google.adk.agents import Agent, ParallelAgent, SequentialAgent
 from google.adk.tools import ToolContext
 from temporalio.common import RetryPolicy
 from temporalio.contrib.google_adk_agents import TemporalModel
-from temporalio.contrib.google_adk_agents.workflow import activity_tool
 from temporalio.workflow import ActivityConfig
 
+from agent_fleet._activity_tool import activity_tool
 from agent_fleet.activities import (
     tool_get_fleet_status,
     tool_get_order_priorities,
