@@ -66,7 +66,6 @@ FAST_RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=1),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=30),
-    maximum_attempts=5,
 )
 NAV_RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=3),
@@ -407,9 +406,9 @@ class DriverRouteWorkflow:
                             delivery_lng=order.delivery_lng,
                         ),
                     )
-                except Exception:
+                except Exception as e:
                     workflow.logger.warning(
-                        f"Could not signal parent for {order.order_id} delivery"
+                        f"Could not signal parent for {order.order_id} delivery: {e}"
                     )
 
             # All pending orders processed — driver is idle
@@ -562,13 +561,18 @@ class MeltdownDemoWorkflow:
     async def order_delivered(self, inp: OrderDeliveredInput) -> None:
         """Signaled by DriverRouteWorkflow when a delivery completes."""
         driver_id = inp.driver_id
+        before = len(self._driver_orders.get(driver_id, []))
         if driver_id in self._driver_orders:
             if inp.order_id in self._driver_orders[driver_id]:
                 self._driver_orders[driver_id].remove(inp.order_id)
+        after = len(self._driver_orders.get(driver_id, []))
         self._driver_last_position[driver_id] = (inp.delivery_lat, inp.delivery_lng)
         if inp.order_id in self._orders:
             self._orders[inp.order_id]["status"] = "delivered"
-        workflow.logger.info(f"Order {inp.order_id} delivered by {driver_id}")
+        workflow.logger.info(
+            f"Order {inp.order_id} delivered by {driver_id} "
+            f"(orders: {before} → {after})"
+        )
 
     @workflow.signal
     async def new_order(self, order: OrderAssignmentResult) -> None:

@@ -72,7 +72,7 @@ Orders auto-generate on a timer from Las Vegas Strip venues. AI agents reason ab
 │       │   tool_get_route_info (Maps) │
 │       └─ Customer Agent              │
 │           tool_get_order_priorities  │
-│           tool_search_hotel_context  │
+│           google_search (grounding)  │
 │       Resolver →                     │
 │         tool_submit_assignment       │
 │       TemporalModel(→AGENTS_QUEUE)   │
@@ -99,7 +99,7 @@ Fleet Agent, Customer Agent, and Resolver are LLM Agents. The outer `order_assig
 | Agent | Reasoning | Tools |
 |-------|-----------|-------|
 | **Fleet Agent** (operational) | Driver positions, capacity (free slots), ETAs to destination, disconnect status — excludes unavailable drivers | `tool_get_fleet_status`, `tool_get_route_info` (Google Maps) |
-| **Customer Agent** (priority) | VIP vs standard tier, deadline pressure, hotel events (conferences, galas), servings/guest count | `tool_get_order_priorities`, `tool_search_hotel_context` (Google Search) |
+| **Customer Agent** (priority) | VIP vs standard tier, deadline pressure, hotel events (conferences, galas), servings/guest count | `tool_get_order_priorities`, `google_search` (Gemini grounding) |
 | **Resolver** (synthesis) | Weighs Fleet + Customer assessments, compensates if either agent is offline, picks final driver | `tool_submit_assignment`, `tool_publish_agent_event` |
 
 Fleet and Customer run **in parallel** (`ParallelAgent`), then the Resolver runs **sequentially** after both complete (`SequentialAgent`). All tools are wrapped with `activity_tool()` — each call is a Temporal activity, recorded in the event log. If the worker restarts mid-call, results replay from the log.
@@ -113,10 +113,7 @@ Mock mode is completely separate from live code. The `agent_fleet/mock/` folder 
 - Python 3.11+
 - [Temporal CLI](https://docs.temporal.io/cli) (`brew install temporal`)
 - Google Gemini API key (`GOOGLE_API_KEY`) — required for live mode; without it the entire demo runs in mock mode. Restricted to **Generative Language API**.
-- Google Maps + Search API key (`GOOGLE_MAPS_API_KEY`) — used for route polylines, ETAs, and hotel context search. Restricted to **Directions API** + **Custom Search API**. This must be a separate key from `GOOGLE_API_KEY` because the Generative Language API cannot share a key with standard Google Cloud APIs.
-- Google Custom Search Engine ID (`GOOGLE_CSE_ID`) — identifies which search engine to use for hotel context. Set up at [programmablesearchengine.google.com](https://programmablesearchengine.google.com) with relevant hotel/Vegas sites.
-
-> **Note:** Google requires two separate API keys because the Generative Language API (Gemini) and standard Cloud APIs (Maps, Custom Search) have different key restrictions and cannot be combined on a single key.
+- Google Maps API key (`GOOGLE_MAPS_API_KEY`) — used for route polylines and ETAs. Restricted to **Directions API**. This must be a separate key from `GOOGLE_API_KEY` because the Generative Language API cannot share a key with standard Google Cloud APIs.
 
 The startup decision is binary: `GOOGLE_API_KEY` set → live workers (ADK + all API activities), not set → mock workers (deterministic data, no LLM calls). Default model is `gemini-2.5-flash` (override with `DEFAULT_MODEL` env var).
 
@@ -128,7 +125,6 @@ The startup decision is binary: `GOOGLE_API_KEY` set → live workers (ADK + all
 pip install -e ".[dev]"
 echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
 echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
-echo 'export GOOGLE_CSE_ID="your-cse-id"' >> .env          # for hotel context search
 ```
 
 ### 2. Run
@@ -156,11 +152,11 @@ echo 'export GOOGLE_CSE_ID="your-cse-id"' >> .env          # for hotel context s
 | File | What it does |
 |------|-------------|
 | `agent_fleet/models.py` | Dataclass models for all Temporal payloads (incl. `DriverSnapshot`) |
-| `agent_fleet/simulation.py` | FleetState — write-only UI projection (used by mock activities only) |
+| `agent_fleet/simulation.py` | FleetState — SQLite WAL-backed write-only UI projection (`fleet_state.db`, cross-process; used by mock activities only) |
 | `agent_fleet/activities.py` | Temporal activities — navigation, delivery, Maps API, agent tools |
 | `agent_fleet/workflows.py` | Temporal workflows — owns driver state, cancellation scopes, signals, queries. Includes `OrderGenerationWorkflow` |
 | `agent_fleet/agents.py` | ADK agent composition — Fleet, Customer, Assignment Resolver |
-| `agent_fleet/config.py` | Centralized env config — `GOOGLE_API_KEY`, `GOOGLE_MAPS_API_KEY`, `GOOGLE_CSE_ID`, `DEFAULT_MODEL`, `TEMPORAL_ADDRESS` |
+| `agent_fleet/config.py` | Centralized env config — `GOOGLE_API_KEY`, `GOOGLE_MAPS_API_KEY`, `DEFAULT_MODEL`, `TEMPORAL_ADDRESS` |
 | `agent_fleet/queues.py` | Task queue name constants (workflows / delivery / agents) |
 | `agent_fleet/worker.py` | Three Temporal workers — workflow-only, delivery, agents. Live/mock decision at startup |
 | `agent_fleet/mock/` | Self-contained mock mode — `activities.py` (deterministic mocks with `name=` overrides) and `worker.py` (3 workers, no GoogleAdkPlugin) |

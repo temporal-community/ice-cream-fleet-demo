@@ -9,8 +9,7 @@ This guide is for anyone presenting the Meltdown demo. It covers setup, the one-
 **Requirements:**
 - `.env` with two API keys (Google requires separate keys for Gemini vs Cloud APIs):
   - `GOOGLE_API_KEY` — Gemini key, restricted to Generative Language API. Without it, the demo runs in mock mode.
-  - `GOOGLE_MAPS_API_KEY` — Maps + Search key, restricted to Directions API + Custom Search API.
-  - `GOOGLE_CSE_ID` — Custom Search Engine ID from [programmablesearchengine.google.com](https://programmablesearchengine.google.com).
+  - `GOOGLE_MAPS_API_KEY` — Maps key, restricted to Directions API.
 - `./run.sh` (or `make run`) started — this starts the Temporal dev server, worker process, and server process automatically. Browser open at http://localhost:8080
 - Temporal UI open at http://localhost:8233 (optional but great for showing workflow history)
 
@@ -50,7 +49,7 @@ Use this framing at the start of the talk before any demo:
 | Agent | What it evaluates | Tools it calls |
 |-------|-------------------|----------------|
 | **Fleet Agent** | Driver positions, free capacity slots, driving ETAs to destination, driver disconnect status | `tool_get_fleet_status`, `tool_get_route_info` (Google Maps Directions) |
-| **Customer Agent** | VIP vs standard priority, deadline tightness, hotel events (conferences, galas, pool parties), servings/guest count | `tool_get_order_priorities`, `tool_search_hotel_context` (Google Custom Search) |
+| **Customer Agent** | VIP vs standard priority, deadline tightness, hotel events (conferences, galas, pool parties), servings/guest count | `tool_get_order_priorities`, `google_search` (Gemini grounding) |
 | **Resolver** | Synthesizes both assessments, compensates if either agent is offline, picks final driver and submits structured assignment | `tool_submit_assignment`, `tool_publish_agent_event` |
 
 ---
@@ -202,9 +201,9 @@ The demo runs three Temporal workers in a **separate worker process** (`python -
 |---|---|---|
 | `meltdown-workflows` | Workflows only | `MeltdownDemoWorkflow`, `DriverRouteWorkflow`, `OrderGenerationWorkflow` — no activities, dedicated to replay |
 | `meltdown-delivery` | Delivery | `navigate_to`, `pickup_orders`, `deliver_order`, `generate_order`, `execute_customer_change`, `get_route_polyline`, `get_fleet_status`, `get_order_priorities`, `publish_agent_event` |
-| `meltdown-agents` | Agents | `register_assignment`, all `tool_*` activities (`tool_get_fleet_status`, `tool_get_order_priorities`, `tool_publish_agent_event`, `tool_get_route_info`, `tool_search_hotel_context`) |
+| `meltdown-agents` | Agents | `register_assignment`, all `tool_*` activities (`tool_get_fleet_status`, `tool_get_order_priorities`, `tool_publish_agent_event`, `tool_get_route_info`) + `google_search` (Gemini grounding) |
 
-**Why a workflows-only worker?** Workflows must be deterministic and replayable. Keeping them on a dedicated worker with no activities makes it physically impossible for workflow code to touch `FleetState` or do I/O. This is the Temporal-idiomatic pattern for production deployments.
+**Why a workflows-only worker?** Workflows must be deterministic and replayable. Keeping them on a dedicated worker with no activities makes it physically impossible for workflow code to touch `FleetState` (SQLite WAL-backed, `fleet_state.db`) or do I/O. This is the Temporal-idiomatic pattern for production deployments.
 
 **Why separate activity queues?** LLM calls are slow — a single Gemini call can take 3–5 seconds. Without queue separation, a flood of assignment requests could fill all worker slots and starve navigation activities, causing drivers to miss heartbeat timeouts. The agents queue is rate-limited to 5 concurrent activities; the delivery queue runs 20.
 
@@ -225,7 +224,7 @@ def create_agents_worker(client: Client) -> Worker:
     return Worker(client, task_queue=AGENTS_QUEUE,
                   activities=[register_assignment, tool_get_fleet_status,
                               tool_get_order_priorities, tool_publish_agent_event,
-                              tool_get_route_info, tool_search_hotel_context],
+                              tool_get_route_info],
                   max_concurrent_activities=5,
                   plugins=[GoogleAdkPlugin()])  # invoke_model activity registration
 ```
@@ -238,7 +237,7 @@ Mock mode lives in `agent_fleet/mock/` — its own `activities.py` and `worker.p
 
 Mock activities use `@activity.defn(name=...)` overrides to match live activity names (e.g., `mock_get_route_polyline` is registered as `"get_route_polyline"`, `mock_reason_about_assignment` as `"reason_about_assignment"`). Workflows don't know or care which version is running. The mock worker also skips `GoogleAdkPlugin` since there are no LLM calls.
 
-This matters for the demo narrative: real activities let failures propagate to Temporal's retry mechanism. If the Google Maps API returns an error, it shows up as a failed activity in the Temporal UI — retried with backoff — exactly as it would in production. Mock mode is an explicit configuration choice, not a hidden fallback that masks failures.
+This matters for the demo narrative: real activities let failures propagate to Temporal's retry mechanism. If the Google Maps API returns an error, it shows up as a failed activity in the Temporal UI — retried with unlimited attempts and exponential backoff until the issue resolves, exactly as it would in production. Mock mode is an explicit configuration choice, not a hidden fallback that masks failures.
 
 ### What this would look like without Temporal
 
@@ -269,7 +268,7 @@ In this demo, the workflows are the source of truth for all operational state �
 **What happens automatically:**
 1. Each order triggers multi-agent reasoning — watch the Agent Reasoning panel
 2. Fleet Agent calls `tool_get_fleet_status` and `tool_get_route_info` — scans driver positions, free capacity slots, and driving ETAs. Recommends the closest available driver.
-3. Customer Agent calls `tool_get_order_priorities` and `tool_search_hotel_context` — evaluates VIP tier, deadline pressure, hotel events (conferences, galas), and guest count. Mandalay Bay orders are always VIP.
+3. Customer Agent calls `tool_get_order_priorities` and uses `google_search` (Gemini grounding) — evaluates VIP tier, deadline pressure, hotel events (conferences, galas), and guest count. Mandalay Bay orders are always VIP.
 4. Resolver synthesizes both assessments and calls `tool_submit_assignment` — picks the best driver and explains why
 5. Drivers continuously pick up from Frosty's and deliver to hotels, looping back for more
 
