@@ -39,7 +39,7 @@ from agent_fleet.models import (
 )
 from agent_fleet.queues import WORKFLOWS_QUEUE
 from agent_fleet.simulation import fleet
-from agent_fleet.workflows import DriverRouteWorkflow, MeltdownDemoWorkflow
+from agent_fleet.workflows import MeltdownDemoWorkflow
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -183,6 +183,13 @@ async def reconnect_driver(body: DriverDisconnectRequest):
     # Update FleetState for frontend display
     await fleet.reconnect_driver(body.driver_id)
 
+    # Clear recovery indicator after a short delay
+    async def _clear_recovery():
+        await asyncio.sleep(3)
+        await fleet.mark_driver_recovery_complete(body.driver_id)
+
+    asyncio.create_task(_clear_recovery())
+
     # Signal both workflows
     try:
         parent = _temporal_client.get_workflow_handle("meltdown-demo")
@@ -220,7 +227,9 @@ class AgentDisconnectRequest(BaseModel):
 
 @app.post("/api/disconnect-agent")
 async def disconnect_agent(body: AgentDisconnectRequest):
-    """Take a specific agent offline. Signals the workflow only."""
+    """Take a specific agent offline."""
+    await fleet.disconnect_agent(body.agent_name)
+
     if _temporal_client is not None:
         try:
             handle = _temporal_client.get_workflow_handle("meltdown-demo")
@@ -240,7 +249,9 @@ async def disconnect_agent(body: AgentDisconnectRequest):
 
 @app.post("/api/reconnect-agent")
 async def reconnect_agent(body: AgentDisconnectRequest):
-    """Bring a specific agent back online. Signals the workflow only."""
+    """Bring a specific agent back online."""
+    await fleet.reconnect_agent(body.agent_name)
+
     if _temporal_client is not None:
         try:
             handle = _temporal_client.get_workflow_handle("meltdown-demo")
@@ -334,30 +345,12 @@ async def toggle_escalation():
 
 
 async def _build_snapshot() -> dict:
-    """Build frontend state from FleetState (UI projection written by activities).
+    """Build frontend state from FleetState (SQLite, shared across processes).
 
-    Temporal queries are used for structural state that workflows own
-    (disconnect status, order assignments). FleetState provides high-frequency
-    UI data (positions, path trails, agent events) that activities update
-    during execution.
+    Activities write positions, statuses, and agent events to FleetState.
+    Server disconnect/reconnect endpoints write disconnect state directly.
     """
-    snapshot = await fleet.snapshot()
-
-    # Overlay disconnect/recovery state from workflow queries (source of truth)
-    if _temporal_client is not None:
-        for i in range(1, 4):
-            driver_id = f"ai-driver-{i}"
-            try:
-                handle = _temporal_client.get_workflow_handle(f"route-{driver_id}")
-                status = await handle.query(DriverRouteWorkflow.get_status)
-                if driver_id in snapshot["drivers"]:
-                    d = snapshot["drivers"][driver_id]
-                    d["disconnected"] = status["is_disconnected"]
-                    d["recovering"] = status.get("is_recovering", False)
-            except Exception:
-                pass
-
-    return snapshot
+    return await fleet.snapshot()
 
 
 @app.get("/api/state")
