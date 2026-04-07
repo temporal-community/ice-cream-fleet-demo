@@ -70,9 +70,11 @@ Use this framing at the start of the talk before any demo:
 
 ## The Integration: Why It Matters
 
-> "Here's the key insight: in this demo, every LLM call goes through a `TemporalModel` wrapper — it becomes a Temporal activity. Every tool call (Maps, search, fleet status) is also a Temporal activity. That means if the worker crashes mid-agent-reasoning, Temporal doesn't re-call the LLM. It replays the result from the event log. The agent resumes exactly where it left off, with no extra cost and no lost context."
+> "Here's the key insight: ADK agents run **inline in the Temporal workflow**, not inside an activity. That's a deliberate design choice. Every LLM call that an agent makes becomes its own Temporal activity via `TemporalModel`. Every tool call (Maps, search, fleet status) is also its own Temporal activity via `activity_tool`. If the worker crashes mid-reasoning — say the Fleet Agent already called Gemini but the Customer Agent hasn't yet — Temporal replays the Fleet Agent's result from the event log and only retries what was interrupted. No re-calling Gemini for steps that already completed. No lost context."
 
-This is the "aha" moment. Return to it when showing driver disconnect recovery or the customer change approval flow.
+This is the "aha" moment. The alternative — running ADK inside a single activity — would make the entire agent pipeline one retry unit. If it fails halfway through, everything restarts from scratch. The inline pattern gives you **per-call durability**: each LLM call and each tool call is independently durable, retryable, and visible in the Temporal UI. This is what `TemporalModel` and `activity_tool` from the `temporalio[google-adk]` package were built for.
+
+Return to this when showing the Temporal UI event history — each `invoke_model` and tool call has a summary showing which agent is acting.
 
 ---
 
@@ -191,7 +193,7 @@ ADK owns the agent orchestration — the sequencing of Fleet → Customer → Re
 
 An alternative "more Temporal-native" design would be to put the Fleet → Customer → Resolver sequencing directly in the workflow and only push the raw LLM calls into activities. That gives you more explicit visibility in the Temporal UI — each agent step shows up as a named workflow step. The tradeoff is you'd be rewriting ADK's orchestration in Temporal workflow code, giving up ADK's agent composition primitives.
 
-The current design keeps both frameworks doing what they're best at: **ADK composes and sequences agents, Temporal makes every external call durable.** The replay safety is there either way — it's a question of where the orchestration logic lives and how much of it is visible in the Temporal event log.
+The current design keeps both frameworks doing what they're best at: **ADK composes and sequences agents, Temporal makes every external call durable.** This is the recommended pattern for the `temporalio[google-adk]` integration — `TemporalModel` and `activity_tool` exist specifically to enable ADK agents running inline in workflows with per-call durability.
 
 ### The 3-queue worker architecture
 
@@ -253,6 +255,60 @@ Without Temporal, the same orchestration would require:
 Temporal collapses all of that into the workflow execution model. The event log *is* the state persistence. `execute_activity` *is* the retry logic. Signals *are* the message passing. Cancellation scopes *are* the interrupt mechanism. The workflow code reads like a straightforward sequential program because Temporal handles everything else.
 
 In this demo, the workflows are the source of truth for all operational state — driver positions, order assignments, disconnect status. Activities receive this state as inputs and return results. The server queries workflows directly for the frontend WebSocket via `_build_snapshot_from_queries()` — no intermediate FleetState needed. If the worker process restarts, Temporal replays the workflows, activities re-execute, and the server's queries return fresh state.
+
+### Live mode execution pipeline (end-to-end)
+
+This traces a single order from button click to delivery — every function and file in sequence.
+
+**1. Browser → Server** — User clicks "Start Deliveries"
+- [`server.py`](agent_fleet/server.py) `start_demo()` → starts `MeltdownDemoWorkflow` on `WORKFLOWS_QUEUE`
+
+**2. Main workflow initializes**
+- [`workflows.py`](agent_fleet/workflows.py) `MeltdownDemoWorkflow.run()` → starts 3 `DriverRouteWorkflow` children + `OrderGenerationWorkflow` child
+
+**3. Order generates on timer**
+- [`workflows.py`](agent_fleet/workflows.py) `OrderGenerationWorkflow.run()` → calls `generate_order` activity every 15s → signals parent with `new_order`
+- [`activities.py`](agent_fleet/activities.py) `generate_order()` → picks random venue, registers in FleetState
+
+**4. Parent runs ADK agents inline**
+- [`workflows.py`](agent_fleet/workflows.py) `_assign_order()` → builds `DriverSnapshot`s from workflow state → calls `_run_adk_assignment()`
+- `_run_adk_assignment()` → creates ADK `Runner`, calls `runner.run_async()` — agents execute **inline in the workflow**
+
+**5. ADK agent pipeline**
+- [`agents.py`](agent_fleet/agents.py) `create_order_assignment_agent()` → `SequentialAgent`:
+  - `ParallelAgent` runs **Fleet Agent** + **Customer Agent** simultaneously
+  - Then **Resolver** runs sequentially
+- Each agent uses `TemporalModel` → every Gemini call becomes an `invoke_model` activity on `AGENTS_QUEUE`
+
+**6. Tool calls → Temporal activities**
+- [`agents.py`](agent_fleet/agents.py) — tools wrapped via `activity_tool()` from [`_activity_tool.py`](agent_fleet/_activity_tool.py)
+- Fleet Agent calls: `tool_get_fleet_status`, `tool_get_route_info` (Google Maps)
+- Customer Agent calls: `tool_get_order_priorities`, `google_search` (Gemini grounding)
+- Each tool call → `workflow.execute_activity()` → recorded in Temporal event log
+
+**7. Resolver decides**
+- [`agents.py`](agent_fleet/agents.py) `tool_submit_assignment()` → writes `{driver_id, reasoning_summary}` to ADK session state (in-memory, not a Temporal activity)
+
+**8. Result flows back**
+- [`workflows.py`](agent_fleet/workflows.py) `_run_adk_assignment()` → reads `session.state["assignment"]` → returns `ReasonAboutAssignmentOutput`
+
+**9. Assignment registered, driver signaled**
+- [`workflows.py`](agent_fleet/workflows.py) `_assign_order()` → calls `register_assignment` activity (FleetState write) → signals chosen `DriverRouteWorkflow` with `add_order`
+
+**10. Driver delivers**
+- [`workflows.py`](agent_fleet/workflows.py) `DriverRouteWorkflow.run()` → for each order:
+  - `get_route_polyline` activity → Google Maps polyline to warehouse
+  - `navigate_to` activity → interpolates position with heartbeats (0.4s/step)
+  - `pickup_orders` activity → marks picked up
+  - `get_route_polyline` activity → Google Maps polyline to hotel
+  - `navigate_to` activity → drives to hotel
+  - `deliver_order` activity → marks delivered
+- [`activities.py`](agent_fleet/activities.py) — all activities on `DELIVERY_QUEUE`
+
+**11. Driver signals parent, loops**
+- [`workflows.py`](agent_fleet/workflows.py) → signals parent with `order_delivered` → parent updates `_driver_orders` and `_driver_last_position` → driver returns to idle, waits for next order
+
+**Key difference in live vs mock:** In live mode, ADK runs inline in the workflow — every LLM call and tool call is a separate Temporal activity visible in the event log. In mock mode, the entire reasoning is a single `reason_about_assignment` activity.
 
 ---
 
