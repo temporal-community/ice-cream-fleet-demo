@@ -18,6 +18,37 @@ Orders auto-generate on a timer from Las Vegas Strip venues. **AI agents** (Flee
 | **Service Disruption & Recovery** | Take a delivery actor offline mid-delivery | Delivery actor completes current delivery but can't report back. Temporal retries with backoff until reconnected. Stays at hotel on the map — no teleporting. Reconnect → next retry succeeds → navigates home for next order. |
 | **Human-in-the-Loop (HITL)** | Submit an address change or cancellation mid-delivery | Workflow pauses on `wait_condition`, approves, signals delivery actor — reroutes mid-delivery to new destination. Cross-workflow coordination via signals. |
 
+## Quick Start
+
+### 1. Install and configure
+
+```bash
+pip install -e ".[dev]"
+echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
+echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
+```
+
+### 2. Run
+
+```bash
+./run.sh    # starts Temporal dev server + worker process + server process
+```
+
+### 3. Open the dashboard
+
+| Interface | URL |
+|-----------|-----|
+| **Demo dashboard** | http://localhost:8080 |
+| **Temporal UI** (workflow history, event log) | http://localhost:8233 |
+
+## Demo Flow
+
+1. **Start Deliveries** — Orders auto-generate every 10s. AI agents reason per-order and assign to the best delivery actor. Delivery actors continuously pick up from Frosty's Ice Cream and deliver.
+2. **Demo 1: Tool Degradation** — Take Fleet Agent offline → tools fail fast (2 retries) → error returned to LLM → Dispatch Agent assigns with Customer Agent data → reconnect → full reasoning resumes
+3. **Demo 2: Service Disruption & Recovery** — Select a delivery actor → disconnect → finishes delivery, stays at hotel, can't report → Temporal retries with backoff → reconnect → next retry succeeds → navigates home
+4. **Demo 3: Human-in-the-Loop (HITL)** — Pick an active order → submit address change → workflow pauses for approval → approve → delivery actor reroutes mid-delivery to new destination
+
+
 ## Architecture
 
 ```
@@ -145,36 +176,6 @@ Mock mode is completely separate from live code. The `agent_fleet/mock/` folder 
 - Google Maps API key (`GOOGLE_MAPS_API_KEY`) — used for route polylines and ETAs. Restricted to **Directions API**. This must be a separate key from `GOOGLE_API_KEY` because the Generative Language API cannot share a key with standard Google Cloud APIs.
 
 The startup decision is binary: `GOOGLE_API_KEY` set → live workers (ADK + all API activities), not set → mock workers (deterministic data, no LLM calls). Default model is `gemini-2.5-flash` (override with `DEFAULT_MODEL` env var).
-
-## Quick Start
-
-### 1. Install and configure
-
-```bash
-pip install -e ".[dev]"
-echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
-echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
-```
-
-### 2. Run
-
-```bash
-./run.sh    # starts Temporal dev server + worker process + server process
-```
-
-### 3. Open the dashboard
-
-| Interface | URL |
-|-----------|-----|
-| **Demo dashboard** | http://localhost:8080 |
-| **Temporal UI** (workflow history, event log) | http://localhost:8233 |
-
-## Demo Flow
-
-1. **Start Deliveries** — Orders auto-generate every 10s. AI agents reason per-order and assign to the best delivery actor. Delivery actors continuously pick up from Frosty's Ice Cream and deliver.
-2. **Demo 1: Tool Degradation** — Take Fleet Agent offline → tools fail fast (2 retries) → error returned to LLM → Dispatch Agent assigns with Customer Agent data → reconnect → full reasoning resumes
-3. **Demo 2: Service Disruption & Recovery** — Select a delivery actor → disconnect → finishes delivery, stays at hotel, can't report → Temporal retries with backoff → reconnect → next retry succeeds → navigates home
-4. **Demo 3: Human-in-the-Loop (HITL)** — Pick an active order → submit address change → workflow pauses for approval → approve → delivery actor reroutes mid-delivery to new destination
 
 ## Key Files
 
