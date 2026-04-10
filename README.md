@@ -20,12 +20,34 @@ Orders auto-generate on a timer from Las Vegas Strip venues. **AI agents** (Flee
 
 ## Quick Start
 
+### 0. Obtain API keys
+You'll need two keys to get the demo to run: `GOOGLE_API_KEY` and `GOOGLE_MAPS_API_KEY`.
+
+#### Google API Key
+1. Go to [aistudio.google.com/apikey](aistudio.google.com/apikey) and sign in with your Google account.
+2. Click **Create API key**. Select an existing Google Cloud project or create a new one when prompted.
+3. Copy the generated key and store it as `GOOGLE_API_KEY` in your `.env` file:
+
+```
+echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
+```
+
+#### Google Maps API Key
+
+1. Go to [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials) and select your project.
+2. Click **+ Create credentials → API key.** A new key is generated immediately.
+3. Click **Edit API key** (pencil icon). Under _API restrictions_, select **Restrict key** and choose **Directions API**.
+4. Make sure the Directions API is enabled: go to [APIs & Services → Library](https://console.cloud.google.com/apis/library), search for it, and click **Enable**.
+5. Copy the key and store it as `GOOGLE_MAPS_API_KEY` in your environment or .env file.
+
+```
+echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
+```
+
 ### 1. Install and configure
 
 ```bash
 pip install -e ".[dev]"
-echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
-echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
 ```
 
 ### 2. Run
