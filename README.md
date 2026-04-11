@@ -43,7 +43,7 @@ pip install -e ".[dev]"
 You'll need two keys to get the demo to run: `GOOGLE_API_KEY` and `GOOGLE_MAPS_API_KEY`.
 
 #### Google API Key
-1. Go to [aistudio.google.com/apikey](aistudio.google.com/apikey) and sign in with your Google account.
+1. Go to [API Keys](https://aistudio.google.com/api-keys) and sign in with your Google account.
 2. Click **Create API key**. Select an existing Google Cloud project or create a new one when prompted.
 3. Copy the generated key and store it as `GOOGLE_API_KEY` in your `.env` file:
 
