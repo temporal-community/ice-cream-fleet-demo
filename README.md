@@ -20,7 +20,26 @@ Orders auto-generate on a timer from Las Vegas Strip venues. **AI agents** (Flee
 
 ## Quick Start
 
-### 0. Obtain API keys
+## 0. Install
+Run the following to get things installed:
+
+```
+# Grab the code.
+git clone https://github.com/temporal-community/ice-cream-fleet-demo
+cd ice-cream-fleet-demo
+
+# Rename .env file.
+mv .env-example .env
+
+# Get Python working.
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install the code.
+pip install -e ".[dev]"
+```
+
+### 1. Obtain API keys
 You'll need two keys to get the demo to run: `GOOGLE_API_KEY` and `GOOGLE_MAPS_API_KEY`.
 
 #### Google API Key
@@ -42,12 +61,6 @@ echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
 
 ```
 echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
-```
-
-### 1. Install and configure
-
-```bash
-pip install -e ".[dev]"
 ```
 
 ### 2. Run
