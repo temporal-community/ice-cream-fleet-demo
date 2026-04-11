@@ -39,6 +39,11 @@ mv .env-example .env
 ### 1. Set API keys
 Replace the `GOOGLE_*_KEY` placeholder text in `.env` with your actual keys.
 
+```
+echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
+echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
+```
+
 ### 2. Run
 The `run.sh` script sets up your Python environment, installs dependencies, and gets Temporal running.
 
@@ -219,13 +224,7 @@ make run     # start the demo
 #### Google Gemini API Key
 1. Go to [Google AI Studio](https://aistudio.google.com/) > [API Keys](https://aistudio.google.com/api-keys) and sign in with your Google account.
 2. Click **Create API key**. Select an existing Google Cloud project or create a new one when prompted.
-3. Copy the generated key and store it as `GOOGLE_API_KEY` in your `.env` file:
-
-```
-echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
-```
-
-4. To test that the key is working (replace `PASTE_KEY_HERE`):
+3. To test that the key is working (replace `PASTE_KEY_HERE`):
 
 ```
 curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent" \
@@ -252,12 +251,6 @@ If you get a bunch of JSON back, you're in business!
 2. Go to [Google Cloud Console](console.cloud.google.com) > [APIs & Services](https://console.cloud.google.com/apis/dashboard) > [Credentials](https://console.cloud.google.com/apis/credentials) and select your project.
 3. Click **+ Create credentials → API key.** A new key is generated immediately.
 4. Click **Edit API key** (pencil icon). Under _API restrictions_, select **Restrict key** and choose **Directions API**.
-
-5. Copy the key and store it as `GOOGLE_MAPS_API_KEY` in your environment or .env file.
-
-```
-echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
-```
 
 ## Troubleshooting
 
