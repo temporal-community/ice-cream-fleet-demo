@@ -5,12 +5,14 @@ This guide is for anyone presenting the Meltdown demo. It covers setup, the one-
 ---
 
 ## Before You Start
+(See [Quickstart](README.md#quick-start) for full setup instructions.)
 
 **Requirements:**
 - `.env` with two API keys (Google requires separate keys for Gemini vs Cloud APIs):
-  - `GOOGLE_API_KEY` — Gemini key, restricted to Generative Language API. Without it, the demo runs in mock mode.
+  - `GOOGLE_API_KEY` — Gemini key, restricted to Gemini API. Without it, the demo runs in mock mode.
   - `GOOGLE_MAPS_API_KEY` — Maps key, restricted to Directions API.
-- `./run.sh` (or `make run`) started — this starts the Temporal dev server, worker process, and server process automatically. Browser open at http://localhost:8080
+- `./run.sh` (or `make run`) started — this starts the Temporal dev server, worker process, and server process automatically.
+- Browser open at http://localhost:8080 for the web app
 - Temporal UI open at http://localhost:8233 (optional but great for showing workflow history)
 
 **Terminology note:** This demo has two distinct actor types:
@@ -64,7 +66,7 @@ Use this framing at the start of the talk before any demo:
 
 **The 30-second version:**
 
-> "Temporal is a durable execution platform. You write your business logic as code — workflows and activities — and Temporal guarantees it runs to completion even if the service crashes, times out, or gets disconnected. Every step is recorded in an event log. If the worker dies mid-execution, Temporal replays the history deterministically, and your code resumes exactly where it left off."
+> "Temporal is a durable execution platform. You write your business logic as code — workflows and activities — and Temporal guarantees it runs to completion even if the service crashes, times out, or gets disconnected. Every step is recorded in an event log. If the worker dies mid-execution, Temporal replays the history, and your code resumes exactly where it left off."
 
 **Key points to land:**
 - Workflows are durable — crashes don't lose state
