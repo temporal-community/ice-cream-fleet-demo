@@ -33,7 +33,7 @@ git clone https://github.com/temporal-community/ice-cream-fleet-demo
 cd ice-cream-fleet-demo
 
 # Rename .env file.
-mv .env-example .env
+mv .env.example .env
 ```
 
 ### 1. Set API keys
