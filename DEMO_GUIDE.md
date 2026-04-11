@@ -25,9 +25,31 @@ If completed successfully, the web app should look like the following:
 - "Start Deliveries" button is active
 - If you see a stale state from a prior run, click **Reset** first
 
-**Tip:** Do a dry run of each scenario before presenting to get familiar with the agent reasoning panel timing.
+**Tip:** Do a dry run of each [scenario](#demo-scenarios) before presenting to get familiar with the agent reasoning panel timing.
 
 ---
+
+## The One-Minute Pitch
+
+Use this framing at the start of the talk before any demo:
+
+> "AI agents are increasingly being used to automate complex decisions — but in production, they break. The worker crashes. A tool call times out. The LLM call returns mid-reasoning and the state is gone. What we're showing today is what happens when you combine Google ADK — a framework for composing multi-agent AI — with Temporal — a durable execution engine — so that every agent action is retryable, replayable, and recoverable."
+
+---
+
+## What is Google ADK?
+
+**The 30-second version:**
+
+> "Google ADK is an open-source framework for building multi-agent AI systems. You compose agents — each with their own tools and model — into pipelines: run them sequentially, in parallel, or nested. In this demo, a Fleet Agent assesses delivery actor positions and capacity, a Customer Agent evaluates order priority and hotel context, and a Dispatch Agent synthesizes their output into a delivery assignment."
+
+**Key points to land:**
+- ADK has two agent types: **LLM Agents** (`Agent` with a model) call Gemini to reason and use tools; **Orchestrator Agents** (`SequentialAgent`, `ParallelAgent`) coordinate sub-agents without calling an LLM themselves
+- In this demo: Fleet Agent, Customer Agent, and Dispatch Agent are all LLM Agents — each calls Gemini. The outer pipeline (`create_order_assignment_agent`) is an Orchestrator Agent — it sequences them with no LLM of its own
+- Each agent can use tools (Maps, Search, custom functions)
+- ADK supports multiple model providers — this demo uses Gemini, but you can swap to other models by changing the config
+- ADK manages the multi-turn reasoning loop — the developer just defines the agents and wires them together
+
 
 ## Demo Scenarios
 
