@@ -20,7 +20,7 @@ Orders auto-generate on a timer from Las Vegas Strip venues. **AI agents** (Flee
 
 ## Quick Start
 
-## 0. Install
+### 0. Install
 Run the following to get things installed:
 
 ```
