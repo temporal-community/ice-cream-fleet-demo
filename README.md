@@ -20,6 +20,10 @@ Orders auto-generate on a timer from Las Vegas Strip venues. **AI agents** (Flee
 
 ## Quick Start
 
+You'll need two keys to get the demo to run: `GOOGLE_API_KEY` and `GOOGLE_MAPS_API_KEY`.
+
+If you don't have them, skip down to [Obtain API Keys](#obtain-api-keys) and come back.
+
 ### 0. Install
 Run the following to get things installed:
 
@@ -30,87 +34,13 @@ cd ice-cream-fleet-demo
 
 # Rename .env file.
 mv .env-example .env
-
-# Get Python working.
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install the code.
-pip install -e ".[dev]"
 ```
 
-### 1. Obtain API keys
-You'll need two keys to get the demo to run: `GOOGLE_API_KEY` and `GOOGLE_MAPS_API_KEY`.
-
-#### Google Gemini API Key
-1. Go to [Google AI Studio](https://aistudio.google.com/) > [API Keys](https://aistudio.google.com/api-keys) and sign in with your Google account.
-2. Click **Create API key**. Select an existing Google Cloud project or create a new one when prompted.
-3. Copy the generated key and store it as `GOOGLE_API_KEY` in your `.env` file:
-
-```
-echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
-```
-
-4. To test that the key is working (replace `PASTE_KEY_HERE`):
-
-```
-curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent" \
-  -H 'Content-Type: application/json' \
-  -H 'X-goog-api-key: PASTE_KEY_HERE' \
-  -X POST \
-  -d '{
-    "contents": [
-      {
-        "parts": [
-          {
-            "text": "Explain how AI works in a few words"
-          }
-        ]
-      }
-    ]
-  }'
-```
-If you get a bunch of JSON back, you're in business!
-
-If you see this instead, double check that you've copied your key correctly:
-
-```
-  "error": {
-    "code": 400,
-    "message": "API key not valid. Please pass a valid API key.",
-    "status": "INVALID_ARGUMENT",
-    "details": [
-      {
-        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-        "reason": "API_KEY_INVALID",
-        "domain": "googleapis.com",
-        "metadata": {
-          "service": "generativelanguage.googleapis.com"
-        }
-      },
-      {
-        "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
-        "locale": "en-US",
-        "message": "API key not valid. Please pass a valid API key."
-      }
-    ]
-  }
-  ```
-
-#### Google Maps API Key
-
-1. Make sure the **Directions API** is enabled: go to[Google Cloud Console](console.cloud.google.com) > [APIs & Services](https://console.cloud.google.com/apis/dashboard), search for it, and click **Enable**.
-2. Go to [Google Cloud Console](console.cloud.google.com) > [APIs & Services](https://console.cloud.google.com/apis/dashboard) > [Credentials](https://console.cloud.google.com/apis/credentials) and select your project.
-3. Click **+ Create credentials → API key.** A new key is generated immediately.
-4. Click **Edit API key** (pencil icon). Under _API restrictions_, select **Restrict key** and choose **Directions API**.
-
-5. Copy the key and store it as `GOOGLE_MAPS_API_KEY` in your environment or .env file.
-
-```
-echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
-```
+### 1. Set API keys
+Replace the `GOOGLE_*_KEY` placeholder text in `.env` with your actual keys.
 
 ### 2. Run
+The `run.sh` script sets up your Python environment, installs dependencies, and gets Temporal running.
 
 ```bash
 ./run.sh    # starts Temporal dev server + worker process + server process
@@ -284,3 +214,76 @@ make fmt     # ruff format (write)
 make test    # pytest
 make run     # start the demo
 ```
+### Obtain API keys
+
+#### Google Gemini API Key
+1. Go to [Google AI Studio](https://aistudio.google.com/) > [API Keys](https://aistudio.google.com/api-keys) and sign in with your Google account.
+2. Click **Create API key**. Select an existing Google Cloud project or create a new one when prompted.
+3. Copy the generated key and store it as `GOOGLE_API_KEY` in your `.env` file:
+
+```
+echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
+```
+
+4. To test that the key is working (replace `PASTE_KEY_HERE`):
+
+```
+curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent" \
+  -H 'Content-Type: application/json' \
+  -H 'X-goog-api-key: PASTE_KEY_HERE' \
+  -X POST \
+  -d '{
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Explain how AI works in a few words"
+          }
+        ]
+      }
+    ]
+  }'
+```
+If you get a bunch of JSON back, you're in business!
+
+#### Google Maps API Key
+
+1. Make sure the **Directions API** is enabled: go to[Google Cloud Console](console.cloud.google.com) > [APIs & Services](https://console.cloud.google.com/apis/dashboard), search for it, and click **Enable**.
+2. Go to [Google Cloud Console](console.cloud.google.com) > [APIs & Services](https://console.cloud.google.com/apis/dashboard) > [Credentials](https://console.cloud.google.com/apis/credentials) and select your project.
+3. Click **+ Create credentials → API key.** A new key is generated immediately.
+4. Click **Edit API key** (pencil icon). Under _API restrictions_, select **Restrict key** and choose **Directions API**.
+
+5. Copy the key and store it as `GOOGLE_MAPS_API_KEY` in your environment or .env file.
+
+```
+echo 'export GOOGLE_MAPS_API_KEY="your-maps-key"' >> .env  # optional, must be Maps-enabled
+```
+
+## Troubleshooting
+
+### When I tested my Google Gemini API key, there was an error.
+
+If you something like this instead, double check that you've copied your key correctly:
+
+```
+  "error": {
+    "code": 400,
+    "message": "API key not valid. Please pass a valid API key.",
+    "status": "INVALID_ARGUMENT",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "API_KEY_INVALID",
+        "domain": "googleapis.com",
+        "metadata": {
+          "service": "generativelanguage.googleapis.com"
+        }
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+        "locale": "en-US",
+        "message": "API key not valid. Please pass a valid API key."
+      }
+    ]
+  }
+  ```
