@@ -99,10 +99,11 @@ If you see this instead, double check that you've copied your key correctly:
 
 #### Google Maps API Key
 
-1. Go to [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials) and select your project.
-2. Click **+ Create credentials → API key.** A new key is generated immediately.
-3. Click **Edit API key** (pencil icon). Under _API restrictions_, select **Restrict key** and choose **Directions API**.
-4. Make sure the Directions API is enabled: go to [APIs & Services → Library](https://console.cloud.google.com/apis/library), search for it, and click **Enable**.
+1. Make sure the **Directions API** is enabled: go to[Google Cloud Console](console.cloud.google.com) > [APIs & Services](https://console.cloud.google.com/apis/dashboard), search for it, and click **Enable**.
+2. Go to [Google Cloud Console](console.cloud.google.com) > [APIs & Services](https://console.cloud.google.com/apis/dashboard) > [Credentials](https://console.cloud.google.com/apis/credentials) and select your project.
+3. Click **+ Create credentials → API key.** A new key is generated immediately.
+4. Click **Edit API key** (pencil icon). Under _API restrictions_, select **Restrict key** and choose **Directions API**.
+
 5. Copy the key and store it as `GOOGLE_MAPS_API_KEY` in your environment or .env file.
 
 ```
