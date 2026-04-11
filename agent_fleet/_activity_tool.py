@@ -8,9 +8,13 @@ Two fixes over the upstream temporalio.contrib.google_adk_agents.workflow.activi
 
 2. Graceful failure: when an activity exhausts its retry policy, the error is
    caught and returned as a string to the LLM instead of crashing the ADK
-   pipeline. This lets agents reason about tool failures — the Resolver can
+   pipeline. This lets agents reason about tool failures — the Dispatch Agent can
    assign based on available data when Fleet Agent tools are down. Temporal
    still shows the retry attempts in the UI.
+
+3. Dynamic summaries: if a base summary is provided, tool arguments are appended
+   to distinguish multiple calls to the same tool (e.g., route info for different
+   destinations).
 """
 
 import inspect
@@ -18,6 +22,9 @@ from collections.abc import Callable
 from typing import Any
 
 from temporalio import workflow
+
+# Parameters whose values are appended to the summary for disambiguation
+_SUMMARY_PARAMS = {"destination_name"}
 
 
 def activity_tool(activity_def: Callable, **kwargs: Any) -> Callable:
@@ -30,6 +37,8 @@ def activity_tool(activity_def: Callable, **kwargs: Any) -> Callable:
     to the LLM instead of raising — so the agent pipeline continues.
     """
 
+    base_summary = kwargs.get("summary", "")
+
     async def wrapper(*args: Any, **kw: Any):
         sig = inspect.signature(activity_def)
         bound = sig.bind(*args, **kw)
@@ -37,6 +46,16 @@ def activity_tool(activity_def: Callable, **kwargs: Any) -> Callable:
 
         activity_args = list(bound.arguments.values())
         options = kwargs.copy()
+
+        # Build dynamic summary from arguments
+        if base_summary:
+            extras = []
+            for param_name in _SUMMARY_PARAMS:
+                val = bound.arguments.get(param_name)
+                if val:
+                    extras.append(str(val))
+            if extras:
+                options["summary"] = f"{base_summary} — {', '.join(extras)}"
 
         try:
             if len(activity_args) == 0:
@@ -47,7 +66,7 @@ def activity_tool(activity_def: Callable, **kwargs: Any) -> Callable:
                 return await workflow.execute_activity(activity_def, args=activity_args, **options)
         except Exception as e:
             # Return error to the LLM as a tool response — don't crash the pipeline.
-            # The LLM can reason about the failure and adapt (e.g., Resolver assigns
+            # The LLM can reason about the failure and adapt (e.g., Dispatch Agent assigns
             # without fleet data when Fleet Agent tools are disconnected).
             return f"ERROR: Tool {activity_def.__name__} failed: {e}"
 

@@ -34,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
         navigate_to,
         pickup_orders,
         publish_agent_event,
+        publish_agent_events_batch,
         register_assignment,
     )
     from agent_fleet.agents import create_order_assignment_agent
@@ -245,6 +246,7 @@ class DriverRouteWorkflow:
                 self._active_order_id = order.order_id
                 self._reroute_pending = None
                 self._cancel_pending = False
+                onum = order.order_id.split("-", 1)[-1]
 
                 # Navigate to shop for pickup
                 self._status = "en_route_pickup"
@@ -252,7 +254,7 @@ class DriverRouteWorkflow:
                     get_route_polyline,
                     args=[self._current_lat, self._current_lng, WAREHOUSE.lat, WAREHOUSE.lng],
                     task_queue=DELIVERY_QUEUE,
-                    summary=f"{driver_id} — route to shop for {order.order_id}",
+                    summary=f"[#{onum}] {driver_id} — route to shop",
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
@@ -296,7 +298,7 @@ class DriverRouteWorkflow:
                         order_ids=[order.order_id],
                     ),
                     task_queue=DELIVERY_QUEUE,
-                    summary=f"{driver_id} — picking up {order.order_id}",
+                    summary=f"[#{onum}] {driver_id} — picking up",
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=NAV_RETRY,
@@ -327,7 +329,7 @@ class DriverRouteWorkflow:
                             order.delivery_lng,
                         ],
                         task_queue=DELIVERY_QUEUE,
-                        summary=f"{driver_id} — route to {order.hotel} for {order.order_id}",
+                        summary=f"[#{onum}] {driver_id} — route to {order.hotel}",
                         schedule_to_close_timeout=timedelta(minutes=5),
                         start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=FAST_RETRY,
@@ -376,7 +378,7 @@ class DriverRouteWorkflow:
                             order_id=order.order_id,
                         ),
                         task_queue=DELIVERY_QUEUE,
-                        summary=f"{driver_id} — delivered {order.order_id} to {order.hotel}",
+                        summary=f"[#{onum}] {driver_id} — delivered to {order.hotel}",
                         schedule_to_close_timeout=timedelta(minutes=5),
                         start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=NAV_RETRY,
@@ -480,7 +482,7 @@ class OrderGenerationWorkflow:
                 generate_order,
                 GenerateOrderInput(order_number=order_num),
                 task_queue=DELIVERY_QUEUE,
-                summary=f"Generate order #{order_num}",
+                summary=f"[#{order_num}] Generate order",
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=FAST_RETRY,
             )
@@ -869,6 +871,7 @@ class MeltdownDemoWorkflow:
 
     async def _assign_order(self, order: OrderAssignmentResult) -> None:
         """Run ADK assignment for a new order and signal the chosen driver."""
+        onum = order.order_id.split("-", 1)[-1]
         self._orders_generated += 1
 
         # Track order in workflow state
@@ -905,7 +908,7 @@ class MeltdownDemoWorkflow:
                 "reason_about_assignment",
                 assignment_input,
                 task_queue=AGENTS_QUEUE,
-                summary=f"Mock resolver — assign {order.order_id}",
+                summary=f"[#{onum}] Dispatch Agent — assign {order.order_id}",
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=FAST_RETRY,
             )
@@ -915,25 +918,25 @@ class MeltdownDemoWorkflow:
             register_assignment,
             args=[assignment.driver_id, order.order_id],
             task_queue=AGENTS_QUEUE,
-            summary=f"Resolver — register {order.order_id} → {assignment.driver_id}",
+            summary=f"[#{onum}] Dispatch Agent — {order.order_id} → {assignment.driver_id}",
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=FAST_RETRY,
         )
 
-        # Publish short summary events to FleetState for the frontend UI panel
-        for evt in assignment.agent_events:
-            await workflow.execute_activity(
-                publish_agent_event,
-                PublishAgentEventInput(
-                    agent_name=evt["agent_name"],
-                    event_type=evt["event_type"],
-                    content=evt["content"],
-                    summary=evt["summary"],
-                ),
-                task_queue=DELIVERY_QUEUE,
-                summary=f"{evt['agent_name']} — {evt['event_type']}",
+        # Publish summary events to FleetState — single batched local activity
+        if assignment.agent_events:
+            await workflow.execute_local_activity(
+                publish_agent_events_batch,
+                [
+                    PublishAgentEventInput(
+                        agent_name=evt["agent_name"],
+                        event_type=evt["event_type"],
+                        content=evt["content"],
+                        summary=evt.get("summary", ""),
+                    )
+                    for evt in assignment.agent_events
+                ],
                 start_to_close_timeout=timedelta(seconds=10),
-                retry_policy=FAST_RETRY,
             )
 
         # Update workflow-owned driver state
@@ -984,7 +987,8 @@ class MeltdownDemoWorkflow:
     # --- Customer change handling ---
 
     async def _process_customer_change(self, change: CustomerChangeInput) -> None:
-        await workflow.execute_activity(
+        cnum = change.order_id.split("-", 1)[-1]
+        await workflow.execute_local_activity(
             publish_agent_event,
             PublishAgentEventInput(
                 agent_name="customer_agent",
@@ -994,10 +998,7 @@ class MeltdownDemoWorkflow:
                     f"{change.change_type} — {change.new_details}"
                 ),
             ),
-            task_queue=DELIVERY_QUEUE,
-            summary=f"Customer Agent — change request for {change.order_id}",
             start_to_close_timeout=timedelta(seconds=10),
-            retry_policy=FAST_RETRY,
         )
 
         await workflow.wait_condition(lambda: len(self._pending_approvals) > 0)
@@ -1014,7 +1015,7 @@ class MeltdownDemoWorkflow:
                     new_hotel=change.new_hotel,
                 ),
                 task_queue=DELIVERY_QUEUE,
-                summary=f"Resolver — execute change for {change.order_id}",
+                summary=f"[#{cnum}] Dispatch Agent — execute change",
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=FAST_RETRY,
             )
@@ -1041,7 +1042,7 @@ class MeltdownDemoWorkflow:
                         ),
                     )
 
-            await workflow.execute_activity(
+            await workflow.execute_local_activity(
                 publish_agent_event,
                 PublishAgentEventInput(
                     agent_name="resolver",
@@ -1051,23 +1052,17 @@ class MeltdownDemoWorkflow:
                         f"{change.order_id}: {change.new_details}"
                     ),
                 ),
-                task_queue=DELIVERY_QUEUE,
-                summary=f"Resolver — change approved for {change.order_id}",
                 start_to_close_timeout=timedelta(seconds=10),
-                retry_policy=FAST_RETRY,
             )
         else:
-            await workflow.execute_activity(
+            await workflow.execute_local_activity(
                 publish_agent_event,
                 PublishAgentEventInput(
                     agent_name="resolver",
                     event_type="change_rejected",
                     content=f"Customer change rejected for {change.order_id}",
                 ),
-                task_queue=DELIVERY_QUEUE,
-                summary=f"Resolver — change rejected for {change.order_id}",
                 start_to_close_timeout=timedelta(seconds=10),
-                retry_policy=FAST_RETRY,
             )
 
     def _find_driver_for_order(self, order_id: str) -> str | None:

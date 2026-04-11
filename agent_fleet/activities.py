@@ -425,6 +425,18 @@ async def publish_agent_event(
     return PublishAgentEventOutput(success=True)
 
 
+@activity.defn
+async def publish_agent_events_batch(
+    events: list[PublishAgentEventInput],
+) -> PublishAgentEventOutput:
+    """Publish multiple agent events in a single activity call."""
+    for evt in events:
+        await fleet.publish_agent_event(
+            evt.agent_name, evt.event_type, evt.content, summary=evt.summary
+        )
+    return PublishAgentEventOutput(success=True)
+
+
 # --- Customer change activities ---
 
 
