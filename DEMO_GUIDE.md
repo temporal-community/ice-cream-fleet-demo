@@ -19,6 +19,9 @@ If completed successfully, the web app should look like the following:
 
 <img width="1502" height="799" alt="Screenshot 2026-04-10 at 11 04 23 PM" src="https://github.com/user-attachments/assets/39a485e5-cbbf-4057-bb93-e15c7285ee3a" />
 
+## How it works
+See [How It Works](HOW_IT_WORKS.md) for more detailed "under the hood" information.
+
 ## Pre-flight check
 - Map shows 3 hotels (MGM Grand, Caesars, Mandalay Bay) and Frosty's Ice Cream shop
 - All 5 delivery actors are at the ice cream shop, status idle
