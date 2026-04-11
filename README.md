@@ -51,6 +51,52 @@ You'll need two keys to get the demo to run: `GOOGLE_API_KEY` and `GOOGLE_MAPS_A
 echo 'export GOOGLE_API_KEY="your-gemini-key"' > .env
 ```
 
+4. To test that the key is working (replace `PASTE_KEY_HERE`):
+
+```
+curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent" \
+  -H 'Content-Type: application/json' \
+  -H 'X-goog-api-key: PASTE_KEY_HERE' \
+  -X POST \
+  -d '{
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "Explain how AI works in a few words"
+          }
+        ]
+      }
+    ]
+  }'
+```
+If you get a bunch of JSON back, you're in business!
+
+If you see this instead, double check that you've copied your key correctly:
+
+```
+  "error": {
+    "code": 400,
+    "message": "API key not valid. Please pass a valid API key.",
+    "status": "INVALID_ARGUMENT",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "API_KEY_INVALID",
+        "domain": "googleapis.com",
+        "metadata": {
+          "service": "generativelanguage.googleapis.com"
+        }
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+        "locale": "en-US",
+        "message": "API key not valid. Please pass a valid API key."
+      }
+    ]
+  }
+  ```
+
 #### Google Maps API Key
 
 1. Go to [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials) and select your project.
