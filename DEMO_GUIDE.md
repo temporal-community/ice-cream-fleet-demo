@@ -9,7 +9,7 @@ This guide is for anyone presenting the Meltdown demo. It covers setup, the one-
 
 **Requirements:**
 - `.env` with two API keys (Google requires separate keys for Gemini vs Cloud APIs):
-  - `GOOGLE_API_KEY` — Gemini key, restricted to Gemini API. Without it, the demo runs in mock mode.
+  - `GOOGLE_API_KEY` — Gemini key, restricted to Generative Language API. Without it, the demo runs in mock mode.
   - `GOOGLE_MAPS_API_KEY` — Maps key, restricted to Directions API.
 - `./run.sh` (or `make run`) started — this starts the Temporal dev server, worker process, and server process automatically.
 - Browser open at http://localhost:8080 for the web app
