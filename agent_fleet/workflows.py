@@ -200,7 +200,9 @@ class DriverRouteWorkflow:
 
     # --- Helpers ---
 
-    async def _execute_navigate(self, driver_id: str, nav_input: NavigateInput) -> NavigateOutput:
+    async def _execute_navigate(
+        self, driver_id: str, nav_input: NavigateInput, summary: str = ""
+    ) -> NavigateOutput:
         """Execute navigate_to — Temporal retries on failure (including disconnect).
 
         The activity checks FleetState for disconnect status on each heartbeat.
@@ -212,6 +214,7 @@ class DriverRouteWorkflow:
             navigate_to,
             nav_input,
             task_queue=DELIVERY_QUEUE,
+            summary=summary,
             schedule_to_close_timeout=timedelta(minutes=10),
             start_to_close_timeout=timedelta(seconds=120),
             heartbeat_timeout=timedelta(seconds=15),
@@ -254,7 +257,7 @@ class DriverRouteWorkflow:
                     get_route_polyline,
                     args=[self._current_lat, self._current_lng, WAREHOUSE.lat, WAREHOUSE.lng],
                     task_queue=DELIVERY_QUEUE,
-                    summary=f"[#{onum}] {driver_id} — route to shop",
+                    summary=f"[#{onum}] Calculating route to Frosty's",
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
@@ -273,6 +276,7 @@ class DriverRouteWorkflow:
                         start_lat=self._current_lat,
                         start_lng=self._current_lng,
                     ),
+                    summary=f"[#{onum}] Driving to Frosty's",
                 )
                 self._current_lat = nav_result.final_lat
                 self._current_lng = nav_result.final_lng
@@ -298,7 +302,7 @@ class DriverRouteWorkflow:
                         order_ids=[order.order_id],
                     ),
                     task_queue=DELIVERY_QUEUE,
-                    summary=f"[#{onum}] {driver_id} — picking up",
+                    summary=f"[#{onum}] Loading order at Frosty's",
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=NAV_RETRY,
@@ -329,7 +333,7 @@ class DriverRouteWorkflow:
                             order.delivery_lng,
                         ],
                         task_queue=DELIVERY_QUEUE,
-                        summary=f"[#{onum}] {driver_id} — route to {order.hotel}",
+                        summary=f"[#{onum}] Calculating route to {order.hotel}",
                         schedule_to_close_timeout=timedelta(minutes=5),
                         start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=FAST_RETRY,
@@ -348,6 +352,7 @@ class DriverRouteWorkflow:
                             start_lat=self._current_lat,
                             start_lng=self._current_lng,
                         ),
+                        summary=f"[#{onum}] Delivering to {order.hotel}",
                     )
                     self._current_lat = nav_result.final_lat
                     self._current_lng = nav_result.final_lng
@@ -378,7 +383,7 @@ class DriverRouteWorkflow:
                             order_id=order.order_id,
                         ),
                         task_queue=DELIVERY_QUEUE,
-                        summary=f"[#{onum}] {driver_id} — delivered to {order.hotel}",
+                        summary=f"[#{onum}] Order delivered to {order.hotel}",
                         schedule_to_close_timeout=timedelta(minutes=5),
                         start_to_close_timeout=timedelta(seconds=30),
                         retry_policy=NAV_RETRY,
@@ -421,7 +426,7 @@ class DriverRouteWorkflow:
                     get_route_polyline,
                     args=[self._current_lat, self._current_lng, WAREHOUSE.lat, WAREHOUSE.lng],
                     task_queue=DELIVERY_QUEUE,
-                    summary=f"{driver_id} — returning to base",
+                    summary="Calculating return to Frosty's",
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
@@ -439,6 +444,7 @@ class DriverRouteWorkflow:
                         start_lat=self._current_lat,
                         start_lng=self._current_lng,
                     ),
+                    summary="Returning to Frosty's",
                 )
                 self._current_lat = nav_result.final_lat
                 self._current_lng = nav_result.final_lng

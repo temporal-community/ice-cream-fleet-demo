@@ -71,7 +71,7 @@ _order_priorities_tool = activity_tool(
 _route_info_tool = activity_tool(
     tool_get_route_info,
     task_queue=AGENTS_QUEUE,
-    summary="Fleet Agent — get route info",
+    summary="Fleet Agent — assess ETA",
     start_to_close_timeout=timedelta(seconds=15),
     retry_policy=_FLEET_TOOL_RETRY,
 )

@@ -144,6 +144,7 @@ async def tool_get_route_info(
     destination_lat: float,
     destination_lng: float,
     destination_name: str = "",
+    origin_name: str = "",
 ) -> str:
     """Get driving route info between two points using Google Maps Directions API.
 
@@ -158,6 +159,7 @@ async def tool_get_route_info(
         destination_lat: Destination latitude
         destination_lng: Destination longitude
         destination_name: Human-readable name of the destination (e.g. "MGM Grand")
+        origin_name: Human-readable name of the origin (e.g. "driver-3")
     """
     if await fleet.is_agent_disconnected("fleet_agent"):
         raise RuntimeError("Fleet Agent is disconnected — tool unavailable")

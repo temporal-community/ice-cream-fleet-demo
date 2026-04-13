@@ -23,9 +23,6 @@ from typing import Any
 
 from temporalio import workflow
 
-# Parameters whose values are appended to the summary for disambiguation
-_SUMMARY_PARAMS = {"destination_name"}
-
 
 def activity_tool(activity_def: Callable, **kwargs: Any) -> Callable:
     """Wrap a Temporal Activity as an ADK Tool.
@@ -49,13 +46,14 @@ def activity_tool(activity_def: Callable, **kwargs: Any) -> Callable:
 
         # Build dynamic summary from arguments
         if base_summary:
-            extras = []
-            for param_name in _SUMMARY_PARAMS:
-                val = bound.arguments.get(param_name)
-                if val:
-                    extras.append(str(val))
-            if extras:
-                options["summary"] = f"{base_summary} — {', '.join(extras)}"
+            origin = bound.arguments.get("origin_name", "")
+            dest = bound.arguments.get("destination_name", "")
+            if origin and dest:
+                options["summary"] = f"{base_summary} — {origin} → {dest}"
+            elif dest:
+                options["summary"] = f"{base_summary} — {dest}"
+            elif origin:
+                options["summary"] = f"{base_summary} — {origin}"
 
         try:
             if len(activity_args) == 0:

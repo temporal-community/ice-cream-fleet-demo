@@ -26,11 +26,11 @@ _AGENT_LABELS = {
 
 # Human-readable labels for tool responses (success vs error)
 _TOOL_LABELS = {
-    "tool_get_fleet_status": ("fleet status received", "fleet status FAILED"),
-    "tool_get_route_info": ("route ETAs received", "route info FAILED"),
-    "tool_get_order_priorities": ("order priorities received", "order priorities FAILED"),
+    "tool_get_fleet_status": ("LLM reasoning on fleet data", "fleet status FAILED"),
+    "tool_get_route_info": ("LLM reasoning on route ETA", "route ETA FAILED"),
+    "tool_get_order_priorities": ("LLM reasoning on order priorities", "order priorities FAILED"),
     "tool_submit_assignment": ("assignment submitted", "assignment FAILED"),
-    "google_search_agent": ("hotel context received", "hotel search FAILED"),
+    "google_search_agent": ("LLM reasoning on hotel context", "hotel search FAILED"),
 }
 
 
@@ -56,6 +56,17 @@ def _is_error_response(function_response) -> bool:
         return False
     result = function_response.response.get("result", "")
     return isinstance(result, str) and result.startswith("ERROR:")
+
+
+def _count_tool_responses(contents: list, tool_name: str) -> int:
+    """Count how many times a specific tool response appears in the conversation."""
+    count = 0
+    for content in contents:
+        if content.role == "user" and content.parts:
+            for part in content.parts:
+                if part.function_response and part.function_response.name == tool_name:
+                    count += 1
+    return count
 
 
 def _build_summary(llm_request: LlmRequest) -> str:
@@ -88,11 +99,15 @@ def _build_summary(llm_request: LlmRequest) -> str:
                     label = labels[1] if is_error else labels[0]
                 else:
                     label = f"{tool_name} {'FAILED' if is_error else 'received'}"
+                # Add occurrence count to distinguish repeated tool calls
+                count = _count_tool_responses(contents, tool_name)
+                if count > 1:
+                    label = f"{label} ({count})"
                 return f"{prefix}{agent_name} — {label}"
 
-    # Dispatch Agent with prior context — selecting driver
+    # Dispatch Agent with prior context — synthesizing both agents
     if agent_name == "Dispatch Agent":
-        return f"{prefix}{agent_name} — selecting best driver"
+        return f"{prefix}{agent_name} — weighing fleet + customer input"
 
     return f"{prefix}{agent_name} — reasoning"
 
