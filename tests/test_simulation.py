@@ -62,3 +62,50 @@ async def test_assign_order_to_driver():
 
     driver = await fleet.get_driver("driver-a")
     assert "order-1" in driver.current_orders
+
+
+async def test_assign_order_degraded_flag():
+    """Orders assigned while Fleet Agent is offline should have degraded=True."""
+    from agent_fleet.models import Coords
+
+    await fleet.register_order(
+        order_id="order-1",
+        hotel="MGM Grand",
+        label="MGM test",
+        priority="vip",
+        servings=50,
+        delivery_coords=Coords(lat=36.1024, lng=-115.1725),
+        deadline_minutes=30,
+    )
+    # Normal assignment — not degraded
+    await fleet.assign_order_to_driver("driver-a", "order-1", degraded=False)
+    snapshot = await fleet.snapshot()
+    assert snapshot["orders"]["order-1"]["degraded"] is False
+
+    # Degraded assignment
+    await fleet.register_order(
+        order_id="order-2",
+        hotel="Caesars Palace",
+        label="Caesars test",
+        priority="standard",
+        servings=40,
+        delivery_coords=Coords(lat=36.1162, lng=-115.1745),
+        deadline_minutes=40,
+    )
+    await fleet.assign_order_to_driver("driver-b", "order-2", degraded=True)
+    snapshot = await fleet.snapshot()
+    assert snapshot["orders"]["order-2"]["degraded"] is True
+
+
+async def test_get_driver_position():
+    """sync_driver_position relies on get_driver_position returning actual coords."""
+    lat, lng = await fleet.get_driver_position("driver-a")
+    # Should be at warehouse initially (seeded by reset)
+    assert abs(lat - 36.1040) < 0.01
+    assert abs(lng - (-115.1530)) < 0.01
+
+    # Move driver and verify position updates
+    await fleet.update_driver_position("driver-a", 36.12, -115.18)
+    lat, lng = await fleet.get_driver_position("driver-a")
+    assert abs(lat - 36.12) < 0.001
+    assert abs(lng - (-115.18)) < 0.001

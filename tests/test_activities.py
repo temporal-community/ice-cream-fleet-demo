@@ -8,6 +8,7 @@ from agent_fleet.activities import (
     generate_order,
     navigate_to,
     pickup_orders,
+    sync_driver_position,
 )
 from agent_fleet.models import (
     DeliverInput,
@@ -100,3 +101,34 @@ async def test_deliver_order_sets_status(env: ActivityEnvironment):
 
     c = await fleet.get_driver("driver-a")
     assert "order-1" not in c.current_orders
+
+
+async def test_sync_driver_position(env: ActivityEnvironment):
+    """sync_driver_position should return actual driver coords from FleetState."""
+    # Move driver to a known position
+    await fleet.update_driver_position("driver-a", 36.12, -115.18)
+
+    result = await env.run(sync_driver_position, "driver-a")
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert result[0] == pytest.approx(36.12, abs=0.001)
+    assert result[1] == pytest.approx(-115.18, abs=0.001)
+
+
+async def test_pickup_orders_batch(env: ActivityEnvironment):
+    """Batch pickup should mark all orders as picked up."""
+    await env.run(generate_order, GenerateOrderInput(order_number=1))
+    await env.run(generate_order, GenerateOrderInput(order_number=2))
+    await fleet.assign_order_to_driver("driver-a", "order-1")
+    await fleet.assign_order_to_driver("driver-a", "order-2")
+
+    result = await env.run(
+        pickup_orders,
+        PickupInput(driver_id="driver-a", order_ids=["order-1", "order-2"]),
+    )
+    assert result.success is True
+
+    o1 = await fleet.get_order("order-1")
+    o2 = await fleet.get_order("order-2")
+    assert o1.status == OrderStatus.PICKED_UP
+    assert o2.status == OrderStatus.PICKED_UP

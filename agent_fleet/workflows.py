@@ -266,6 +266,8 @@ class DriverRouteWorkflow:
             batch = []
             while self._pending_orders:
                 batch.append(self._pending_orders.pop(0))
+            if not batch:
+                continue
             order_ids_str = ", ".join(
                 f"#{o.order_id.split('-', 1)[-1]}" for o in batch
             )
@@ -962,16 +964,6 @@ class MeltdownDemoWorkflow:
         # Determine if this is a degraded assignment (Fleet Agent offline)
         fleet_offline = "fleet_agent" in self._disconnected_agents
 
-        await workflow.execute_activity(
-            register_assignment,
-            args=[assignment.driver_id, order.order_id, fleet_offline],
-            task_queue=AGENTS_QUEUE,
-            summary=f"[#{onum}] Dispatch Agent — {order.order_id} → {assignment.driver_id}"
-            + (" (degraded)" if fleet_offline else ""),
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=FAST_RETRY,
-        )
-
         # Publish summary events to FleetState — single batched local activity
         if assignment.agent_events:
             await workflow.execute_local_activity(
@@ -1009,6 +1001,17 @@ class MeltdownDemoWorkflow:
                         f"→ {driver_id}"
                     )
                     break
+
+        # Register final assignment AFTER capacity check so SQLite gets the correct driver
+        await workflow.execute_activity(
+            register_assignment,
+            args=[driver_id, order.order_id, fleet_offline],
+            task_queue=AGENTS_QUEUE,
+            summary=f"[#{onum}] Dispatch Agent — {order.order_id} → {driver_id}"
+            + (" (degraded)" if fleet_offline else ""),
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=FAST_RETRY,
+        )
 
         # Update workflow-owned driver state
         if driver_id in self._driver_orders:
