@@ -36,6 +36,7 @@ with workflow.unsafe.imports_passed_through():
         publish_agent_event,
         publish_agent_events_batch,
         register_assignment,
+        sync_driver_position,
     )
     from agent_fleet.agents import create_order_assignment_agent
     from agent_fleet.locations import WAREHOUSE
@@ -74,7 +75,7 @@ NAV_RETRY = RetryPolicy(
     maximum_interval=timedelta(seconds=30),
 )
 
-MAX_ORDERS = 20
+MAX_ORDERS = 30
 ORDER_INTERVAL_SECONDS = 10
 
 PARENT_WORKFLOW_ID = "meltdown-demo"
@@ -111,6 +112,7 @@ class DriverRouteWorkflow:
         self._current_orders: list[str] = []
         self._path_history: list[dict] = []
         self._is_recovering: bool = False
+        self._position_sync_needed: bool = False
         # Mid-delivery reroute/cancel tracking
         self._active_order_id: str | None = None
         self._reroute_pending: dict | None = None  # {"lat": float, "lng": float}
@@ -138,6 +140,7 @@ class DriverRouteWorkflow:
     @workflow.signal
     async def driver_reconnected(self, inp: DriverDisconnectInput) -> None:
         self._is_disconnected = False
+        self._position_sync_needed = True
         workflow.logger.info(f"Driver {inp.driver_id} reconnected — resuming")
 
     @workflow.signal
@@ -244,31 +247,50 @@ class DriverRouteWorkflow:
             if self._stop:
                 break
 
-            # Process all pending orders
-            while self._pending_orders:
-                order = self._pending_orders.pop(0)
-                self._active_order_id = order.order_id
-                self._reroute_pending = None
-                self._cancel_pending = False
-                onum = order.order_id.split("-", 1)[-1]
+            # --- Position sync after reconnect ---
+            if self._position_sync_needed:
+                self._position_sync_needed = False
+                pos = await workflow.execute_activity(
+                    sync_driver_position,
+                    driver_id,
+                    task_queue=DELIVERY_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=10),
+                    retry_policy=FAST_RETRY,
+                )
+                self._current_lat, self._current_lng = pos[0], pos[1]
+                workflow.logger.info(
+                    f"Position synced to ({pos[0]:.4f}, {pos[1]:.4f})"
+                )
 
-                # Navigate to shop for pickup
+            # --- Batch pickup: collect all pending orders, drive to shop once ---
+            batch = []
+            while self._pending_orders:
+                batch.append(self._pending_orders.pop(0))
+            order_ids_str = ", ".join(
+                f"#{o.order_id.split('-', 1)[-1]}" for o in batch
+            )
+
+            # Navigate to shop for pickup (skip if already there)
+            at_shop = (
+                abs(self._current_lat - WAREHOUSE.lat) < 0.001
+                and abs(self._current_lng - WAREHOUSE.lng) < 0.001
+            )
+            if not at_shop:
                 self._status = "en_route_pickup"
                 pickup_waypoints = await workflow.execute_activity(
                     get_route_polyline,
                     args=[self._current_lat, self._current_lng, WAREHOUSE.lat, WAREHOUSE.lng],
                     task_queue=DELIVERY_QUEUE,
-                    summary=f"[#{onum}] Calculating route to Ziggy's",
+                    summary=f"[{order_ids_str}] Calculating route to Ziggy's",
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
                 )
-
                 nav_result = await self._execute_navigate(
                     driver_id,
                     NavigateInput(
                         driver_id=driver_id,
-                        order_id=order.order_id,
+                        order_id=batch[0].order_id,
                         target_lat=WAREHOUSE.lat,
                         target_lng=WAREHOUSE.lng,
                         leg="pickup",
@@ -277,7 +299,7 @@ class DriverRouteWorkflow:
                         start_lat=self._current_lat,
                         start_lng=self._current_lng,
                     ),
-                    summary=f"[#{onum}] Driving to Ziggy's",
+                    summary=f"[{order_ids_str}] Driving to Ziggy's",
                 )
                 self._current_lat = nav_result.final_lat
                 self._current_lng = nav_result.final_lng
@@ -285,39 +307,57 @@ class DriverRouteWorkflow:
                     {"lat": nav_result.final_lat, "lng": nav_result.final_lng}
                 )
 
-                # Check for cancel before pickup
+            # Batch pickup all orders at once
+            self._status = "picking_up"
+            await workflow.execute_activity(
+                pickup_orders,
+                PickupInput(
+                    driver_id=driver_id,
+                    order_ids=[o.order_id for o in batch],
+                ),
+                task_queue=DELIVERY_QUEUE,
+                summary=f"[{order_ids_str}] Loading {len(batch)} order(s) at Ziggy's",
+                schedule_to_close_timeout=timedelta(minutes=5),
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=NAV_RETRY,
+            )
+            # Position is at warehouse after pickup
+            self._current_lat, self._current_lng = WAREHOUSE.lat, WAREHOUSE.lng
+
+            # --- Deliver each order sequentially ---
+            for order in batch:
+                self._active_order_id = order.order_id
+                self._reroute_pending = None
+                self._cancel_pending = False
+                onum = order.order_id.split("-", 1)[-1]
+
+                # Position sync after reconnect (may have happened mid-batch)
+                if self._position_sync_needed:
+                    self._position_sync_needed = False
+                    pos = await workflow.execute_activity(
+                        sync_driver_position,
+                        driver_id,
+                        task_queue=DELIVERY_QUEUE,
+                        start_to_close_timeout=timedelta(seconds=10),
+                        retry_policy=FAST_RETRY,
+                    )
+                    self._current_lat, self._current_lng = pos[0], pos[1]
+
+                # Check for cancel before navigating
                 if self._cancel_pending:
                     workflow.logger.info(
-                        f"Order {order.order_id} cancelled before pickup — skipping"
+                        f"Order {order.order_id} cancelled — skipping"
                     )
                     self._active_order_id = None
                     self._cancel_pending = False
+                    try:
+                        self._current_orders.remove(order.order_id)
+                    except ValueError:
+                        pass
                     continue
 
-                # Pick up — activity checks disconnect, Temporal retries
-                self._status = "picking_up"
-                await workflow.execute_activity(
-                    pickup_orders,
-                    PickupInput(
-                        driver_id=driver_id,
-                        order_ids=[order.order_id],
-                    ),
-                    task_queue=DELIVERY_QUEUE,
-                    summary=f"[#{onum}] Loading order at Ziggy's",
-                    schedule_to_close_timeout=timedelta(minutes=5),
-                    start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=NAV_RETRY,
-                )
-
-                self._current_lat, self._current_lng = WAREHOUSE.lat, WAREHOUSE.lng
-
                 # Navigate to hotel — with reroute loop
-                # If a customer change arrives during delivery navigation, the
-                # reroute_pending flag gets set by the update_order signal handler.
-                # After navigation completes, we check the flag and re-navigate
-                # to the new destination.
                 while True:
-                    # Check for cancel before navigating
                     if self._cancel_pending:
                         workflow.logger.info(
                             f"Order {order.order_id} cancelled — skipping delivery"
@@ -417,7 +457,7 @@ class DriverRouteWorkflow:
                         f"Could not signal parent for {order.order_id} delivery: {e}"
                     )
 
-            # All pending orders processed — drive back to base if not already there
+            # All orders in batch delivered — drive back to base if not already there
             if (
                 abs(self._current_lat - WAREHOUSE.lat) > 0.001
                 or abs(self._current_lng - WAREHOUSE.lng) > 0.001
@@ -919,11 +959,15 @@ class MeltdownDemoWorkflow:
             )
         else:
             assignment = await self._run_adk_assignment(assignment_input)
+        # Determine if this is a degraded assignment (Fleet Agent offline)
+        fleet_offline = "fleet_agent" in self._disconnected_agents
+
         await workflow.execute_activity(
             register_assignment,
-            args=[assignment.driver_id, order.order_id],
+            args=[assignment.driver_id, order.order_id, fleet_offline],
             task_queue=AGENTS_QUEUE,
-            summary=f"[#{onum}] Dispatch Agent — {order.order_id} → {assignment.driver_id}",
+            summary=f"[#{onum}] Dispatch Agent — {order.order_id} → {assignment.driver_id}"
+            + (" (degraded)" if fleet_offline else ""),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=FAST_RETRY,
         )
@@ -944,8 +988,29 @@ class MeltdownDemoWorkflow:
                 start_to_close_timeout=timedelta(seconds=10),
             )
 
-        # Update workflow-owned driver state
+        # Capacity check — reassign if chosen driver is full or disconnected
         driver_id = assignment.driver_id
+        order_count = len(self._driver_orders.get(driver_id, []))
+        driver_disconnected = driver_id in self._disconnected_drivers
+
+        if order_count >= DRIVER_CAPACITY or driver_disconnected:
+            original = driver_id
+            reason = "at capacity" if order_count >= DRIVER_CAPACITY else "disconnected"
+            # Find next available driver
+            for fallback_id in DRIVER_IDS:
+                if fallback_id == original:
+                    continue
+                if fallback_id in self._disconnected_drivers:
+                    continue
+                if len(self._driver_orders.get(fallback_id, [])) < DRIVER_CAPACITY:
+                    driver_id = fallback_id
+                    workflow.logger.warning(
+                        f"Reassigning {order.order_id}: {original} is {reason} "
+                        f"→ {driver_id}"
+                    )
+                    break
+
+        # Update workflow-owned driver state
         if driver_id in self._driver_orders:
             self._driver_orders[driver_id].append(order.order_id)
 

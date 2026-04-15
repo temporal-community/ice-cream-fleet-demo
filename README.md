@@ -60,9 +60,9 @@ The `run.sh` script sets up your Python environment, installs dependencies, and 
 
 ## Demo Flow
 
-1. **Start Deliveries** — Orders auto-generate every 10s. AI agents reason per-order and assign to the best delivery actor. Delivery actors continuously pick up from Frosty's Ice Cream and deliver.
+1. **Start Deliveries** — Orders auto-generate every 10s. AI agents reason per-order and assign to the best delivery actor. Drivers batch-pickup up to 3 orders at Ziggy's Ice Cream and deliver them sequentially.
 2. **Demo 1: Tool Degradation** — Take Fleet Agent offline → tools fail fast (2 retries) → error returned to LLM → Dispatch Agent assigns with Customer Agent data → reconnect → full reasoning resumes
-3. **Demo 2: Service Disruption & Recovery** — Select a delivery actor → disconnect → finishes delivery, stays at hotel, can't report → Temporal retries with backoff → reconnect → next retry succeeds → navigates home
+3. **Demo 2: Fleet Disconnect & Recovery** — Select a driver with multiple orders → disconnect → finishes current delivery, stays at hotel → Temporal retries with backoff → reconnect → resumes from next order, no repeated work
 4. **Demo 3: Human-in-the-Loop (HITL)** — Pick an active order → submit address change → workflow pauses for approval → approve → delivery actor reroutes mid-delivery to new destination
 
 

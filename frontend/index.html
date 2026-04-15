@@ -51,6 +51,21 @@
   header {
     grid-area: header;
     background:
+      radial-gradient(1px 1px at 10% 20%, rgba(255,255,255,0.7) 0%, transparent 100%),
+      radial-gradient(1px 1px at 30% 65%, rgba(255,255,255,0.5) 0%, transparent 100%),
+      radial-gradient(1px 1px at 55% 15%, rgba(255,255,255,0.6) 0%, transparent 100%),
+      radial-gradient(1px 1px at 70% 75%, rgba(255,255,255,0.4) 0%, transparent 100%),
+      radial-gradient(1px 1px at 85% 35%, rgba(255,255,255,0.5) 0%, transparent 100%),
+      radial-gradient(1px 1px at 15% 80%, rgba(255,255,255,0.3) 0%, transparent 100%),
+      radial-gradient(1px 1px at 45% 45%, rgba(255,255,255,0.6) 0%, transparent 100%),
+      radial-gradient(1px 1px at 92% 55%, rgba(255,255,255,0.4) 0%, transparent 100%),
+      radial-gradient(1.5px 1.5px at 25% 40%, rgba(255,255,255,0.8) 0%, transparent 100%),
+      radial-gradient(1.5px 1.5px at 65% 60%, rgba(255,255,255,0.7) 0%, transparent 100%),
+      radial-gradient(1.5px 1.5px at 80% 10%, rgba(255,255,255,0.6) 0%, transparent 100%),
+      radial-gradient(1px 1px at 5% 50%, rgba(255,255,255,0.5) 0%, transparent 100%),
+      radial-gradient(1px 1px at 38% 85%, rgba(255,255,255,0.4) 0%, transparent 100%),
+      radial-gradient(1px 1px at 60% 30%, rgba(255,255,255,0.5) 0%, transparent 100%),
+      radial-gradient(1px 1px at 95% 80%, rgba(255,255,255,0.3) 0%, transparent 100%),
       radial-gradient(ellipse at 80% 20%, rgba(100, 60, 180, 0.25) 0%, transparent 50%),
       radial-gradient(ellipse at 10% 80%, rgba(255, 0, 128, 0.08) 0%, transparent 40%),
       linear-gradient(188deg, #211b4e 0%, #0d0d14 60%, var(--temporal-black) 100%);
@@ -165,12 +180,12 @@
   }
   .tab-panels {
     background: transparent;
-    padding: 20px 40px;
+    padding: 14px 40px;
     border-bottom: 1px solid #465a78;
   }
   .tab-panel {
     display: none;
-    gap: 20px;
+    gap: 10px;
     flex-direction: column;
     align-items: stretch;
   }
@@ -197,12 +212,12 @@
     background: #22974c;
     color: #f8fafc;
     border: none;
-    font-size: 20px;
+    font-size: 16px;
     font-weight: 500;
-    padding: 10px 16px;
+    padding: 8px 16px;
     text-transform: uppercase;
     width: 100%;
-    height: 50px;
+    height: 38px;
   }
   .btn-start:hover { background: #1a7a3d; }
   .btn-restart { background: #0a1828; color: #4080b0; border-color: #153a65; }
@@ -217,7 +232,7 @@
   .btn-reset:hover { color: #9ca3af; border-color: #4b5563; }
   .btn-row {
     display: flex;
-    gap: 20px;
+    gap: 10px;
   }
   .btn-row .btn { flex: 1; }
 
@@ -284,6 +299,31 @@
     color: #92a4c3;
     text-transform: uppercase;
     font-family: 'Inter', -apple-system, sans-serif;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .fleet-panel-label::after,
+  .orders-panel-label::after {
+    content: '\25B4';
+    font-size: 12px;
+    color: #465a78;
+    transition: transform 0.2s ease;
+  }
+  .fleet-panel.collapsed .fleet-panel-label::after,
+  .orders-panel.collapsed .orders-panel-label::after {
+    transform: rotate(180deg);
+  }
+  .fleet-panel.collapsed #crew-cards,
+  .orders-panel.collapsed #order-cards {
+    display: none;
+  }
+  .fleet-panel.collapsed,
+  .orders-panel.collapsed {
+    flex: 0 0 auto;
+    overflow: hidden;
   }
 
   /* Responsive: compact fleet/orders at narrow widths */
@@ -438,6 +478,9 @@
     max-height: 160px;
     overflow-y: auto;
   }
+  .dispatch-offline-notice {
+    padding: 10px 0 4px;
+  }
   .agent-box-entry {
     font-size: 14px;
     line-height: 20px;
@@ -586,8 +629,8 @@
   .status-at_risk { background: #160b03; color: #d8701e; border: 1px solid rgba(216,112,30,0.3); animation: pulse 1s infinite; }
   .status-rerouted { background: #160b03; color: #d8701e; border: 1px solid rgba(216,112,30,0.3); }
   .status-cancelled { background: #280c0c; color: #e45858; border: 1px solid rgba(228,88,88,0.3); }
-  .priority-vip { color: #6172f3; font-weight: 500; }
-  .priority-standard { color: #6172f3; font-weight: 500; }
+  .priority-vip { color: #f97316; font-weight: 700; }
+  .priority-standard { color: #6172f3; font-weight: 400; }
 
   .detail { font-size: 15px; color: #6b7280; margin-top: 3px; }
 
@@ -1005,20 +1048,20 @@
     <h1><span class="accent">MELTDOWN</span> Ice Cream Delivery <span class="sub">Las Vegas</span></h1>
   </div>
   <div class="header-right">
-    <div class="header-brand">
-      <img src="/static/img/temporal_logo.svg" alt="Temporal" title="Temporal" style="height:40px;" />
-    </div>
+    <a href="https://github.com/temporal-community/ice-cream-fleet-demo" target="_blank" class="header-brand" style="text-decoration:none;">
+      <img src="/static/img/temporal_logo.svg" alt="Temporal" title="Temporal — View on GitHub" style="height:40px;" />
+    </a>
     <div class="header-divider"></div>
-    <div class="header-brand">
+    <a href="https://adk.dev" target="_blank" class="header-brand" style="text-decoration:none;">
       <img src="/static/img/google_adk.png" alt="Google ADK" title="Google Agent Development Kit" style="height:40px;" />
       <span class="brand-name">Google ADK</span>
-    </div>
+    </a>
   </div>
 </header>
 
 <div class="tab-bar">
   <button class="tab active" data-tab="agent" onclick="switchTab('agent')">Agent Disconnect <span class="tab-scenario">Tool Degradation</span></button>
-  <button class="tab" data-tab="crew" onclick="switchTab('crew')">Crew Disconnect <span class="tab-scenario">Retries</span></button>
+  <button class="tab" data-tab="crew" onclick="switchTab('crew')">Fleet Disconnect <span class="tab-scenario">Retries</span></button>
   <button class="tab" data-tab="customer" onclick="switchTab('customer')">Customer Change <span class="tab-scenario">HITL</span></button>
   <div class="status-area">
     <div id="worker-status" class="worker-indicator online">
@@ -1032,12 +1075,12 @@
   <div class="tab-panels">
     <div class="tab-panel active" id="panel-agent">
       <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
-      <div style="height:0;border-top:1px solid #465a78;"></div>
+      <div style="height:0;border-top:1px solid #465a78;margin:2px 0;"></div>
       <select id="agent-disconnect-select" class="agent-select">
         <option value="fleet_agent">Fleet Agent</option>
         <option value="customer_agent">Customer Agent</option>
       </select>
-      <button class="btn btn-disrupt" onclick="disconnectAgent()">Service Disconnect</button>
+      <button class="btn btn-disrupt" onclick="disconnectAgent()">Agent Disconnect</button>
       <div class="btn-row">
         <button class="btn btn-restart" onclick="reconnectAgent()">Reconnect</button>
         <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
@@ -1045,7 +1088,7 @@
     </div>
     <div class="tab-panel" id="panel-crew">
       <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
-      <div style="height:0;border-top:1px solid #465a78;"></div>
+      <div style="height:0;border-top:1px solid #465a78;margin:2px 0;"></div>
       <select id="crew-disconnect-select" class="crew-select">
         <option value="driver-a">Driver A</option>
         <option value="driver-b">Driver B</option>
@@ -1061,7 +1104,7 @@
     </div>
     <div class="tab-panel" id="panel-customer">
       <button class="btn btn-start" onclick="startDemo()">Start Deliveries</button>
-      <div style="height:0;border-top:1px solid #465a78;"></div>
+      <div style="height:0;border-top:1px solid #465a78;margin:2px 0;"></div>
       <select id="change-order" class="agent-select">
         <option value="">— no active orders —</option>
       </select>
@@ -1069,13 +1112,15 @@
         <option value="address_change">Address Change</option>
         <option value="cancel">Cancel Order</option>
       </select>
-      <button class="btn btn-change" onclick="submitCustomerChange()">Submit Change</button>
-      <span id="change-status" style="font-size:16px;color:#fbbf24;display:none;">Awaiting approval...</span>
+      <div class="btn-row">
+        <button class="btn btn-change" onclick="submitCustomerChange()">Submit Change</button>
+        <button class="btn btn-reset" onclick="resetDemo()">Reset</button>
+      </div>
+      <span id="change-status" style="font-size:14px;color:#fbbf24;display:none;">Awaiting approval...</span>
       <div class="btn-row">
         <button class="btn btn-approve" id="btn-approve" onclick="approveChange(true)" style="display:none;">Approve</button>
         <button class="btn btn-reject" id="btn-reject" onclick="approveChange(false)" style="display:none;">Reject</button>
       </div>
-      <button class="btn" onclick="resetDemo()">Reset</button>
     </div>
   </div>
 
@@ -1132,12 +1177,12 @@
 </div>
 
 <div class="fleet-orders-row">
-  <div class="fleet-panel">
-    <div class="fleet-panel-label">Delivery Fleet</div>
+  <div class="fleet-panel" id="fleet-panel">
+    <div class="fleet-panel-label" onclick="document.getElementById('fleet-panel').classList.toggle('collapsed')">Delivery Fleet</div>
     <div id="crew-cards"></div>
   </div>
-  <div class="orders-panel">
-    <div class="orders-panel-label">Customer Orders</div>
+  <div class="orders-panel" id="orders-panel">
+    <div class="orders-panel-label" onclick="document.getElementById('orders-panel').classList.toggle('collapsed')">Customer Orders</div>
     <div id="order-cards"></div>
   </div>
 </div>
@@ -1246,22 +1291,65 @@ const TRUCK_SVGS = {
   'driver-e': '/static/img/truck_e.svg',
 };
 
+// Base sizes at zoom 15
+const BASE_ZOOM = 15;
+const BASE_TRUCK_W = 60, BASE_TRUCK_H = 49;
+const BASE_ZIGGY_W = 140;
+
+function mapScale() {
+  const z = map.getZoom();
+  return Math.pow(1.4, z - BASE_ZOOM);
+}
+
 function crewIcon(color, isDisconnected, bearing, driverId) {
+  const s = mapScale();
+  const w = Math.round(BASE_TRUCK_W * s);
+  const h = Math.round(BASE_TRUCK_H * s);
   const flip = typeof bearing === 'number' && bearing > 180;
+  const ringSize = Math.round(68 * s);
   const ring = isDisconnected
-    ? `<div style="position:absolute;top:-6px;left:50%;transform:translateX(-50%);width:68px;height:58px;border:3px solid #ef4444;border-radius:50%;animation:pulse 1.5s infinite;z-index:0;"></div>`
+    ? `<div style="position:absolute;top:${Math.round(-6*s)}px;left:50%;transform:translateX(-50%);width:${ringSize}px;height:${Math.round(58*s)}px;border:3px solid #ef4444;border-radius:50%;animation:pulse 1.5s infinite;z-index:0;"></div>`
     : '';
   const truckSrc = TRUCK_SVGS[driverId] || TRUCK_SVGS['driver-a'];
   return L.divIcon({
     className: 'crew-marker',
-    html: `<div style="position:relative;width:60px;height:49px;">
+    html: `<div style="position:relative;width:${w}px;height:${h}px;">
       ${ring}
-      <img src="${truckSrc}" style="width:60px;height:49px;${flip ? 'transform:scaleX(-1);' : ''}" />
+      <img src="${truckSrc}" style="width:${w}px;height:${h}px;${flip ? 'transform:scaleX(-1);' : ''}" />
     </div>`,
-    iconSize: [60, 49],
-    iconAnchor: [30, 25],
+    iconSize: [w, h],
+    iconAnchor: [Math.round(w/2), Math.round(h/2)],
   });
 }
+
+// Refresh all markers + Ziggy's sign on zoom
+let _lastCrews = null;
+map.on('zoomend', () => {
+  // Resize truck markers
+  if (_lastCrews) {
+    Object.values(_lastCrews).forEach(c => {
+      if (crewMarkers[c.driver_id]) {
+        const color = CREW_COLORS[c.status] || '#94a3b8';
+        const driverColor = DRIVER_COLORS[c.driver_id] || color;
+        const isDisconnected = c.disconnected || c.status === 'disconnected';
+        const prev = prevPositions[c.driver_id];
+        crewMarkers[c.driver_id].setIcon(crewIcon(driverColor, isDisconnected, prev?.bearing || 0, c.driver_id));
+      }
+    });
+  }
+  // Resize Ziggy's sign
+  const ziggyImg = document.querySelector('.ziggy-neon');
+  if (ziggyImg) {
+    ziggyImg.style.width = Math.round(BASE_ZIGGY_W * mapScale()) + 'px';
+  }
+  // Resize Vegas hotel signs
+  document.querySelectorAll('.vegas-diamond').forEach(el => {
+    const s = mapScale();
+    const size = Math.round(52 * s);
+    el.style.width = size + 'px';
+    el.style.height = size + 'px';
+  });
+});
 
 const CREW_COLORS = {
   idle: '#94a3b8',
@@ -1367,6 +1455,7 @@ connectWS();
 
 // --- Update couriers ---
 function updateCrews(crews) {
+  _lastCrews = crews;
   Object.values(crews).forEach(c => {
     const pos = [c.position.lat, c.position.lng];
     const color = CREW_COLORS[c.status] || '#94a3b8';
@@ -1383,7 +1472,7 @@ function updateCrews(crews) {
     const driverColor = DRIVER_COLORS[c.driver_id] || color;
     if (!crewMarkers[c.driver_id]) {
       crewMarkers[c.driver_id] = L.marker(pos, { icon: crewIcon(driverColor, isDisconnected, bearing, c.driver_id) }).addTo(map);
-      crewMarkers[c.driver_id].bindTooltip(c.driver_id.replace(/^driver-/, 'Driver-').toUpperCase(), { direction: 'top', offset: [0, -24] });
+      crewMarkers[c.driver_id].bindTooltip(c.driver_id.replace(/^driver-(.)/, (_, l) => 'Driver-' + l.toUpperCase()), { direction: 'top', offset: [0, -24] });
       crewTrails[c.driver_id] = L.polyline([], {
         color: driverColor, weight: 2, opacity: 0.4, dashArray: '4 6',
       }).addTo(map);
@@ -1404,7 +1493,7 @@ function updateCrews(crews) {
   // Fleet panel cards
   const container = document.getElementById('crew-cards');
   container.innerHTML = Object.values(crews).map(c => {
-    const driverLabel = c.driver_id.replace(/^driver-/, 'Driver-').toUpperCase();
+    const driverLabel = c.driver_id.replace(/^driver-(.)/, (_, l) => 'Driver-' + l.toUpperCase());
     const orderStr = c.current_orders.length > 0 ? c.current_orders.join(', ') : 'None';
     return `
       <div class="card" style="display:flex;align-items:center;gap:13px;">
@@ -1424,13 +1513,15 @@ function updateOrders(orders) {
   container.innerHTML = Object.values(orders).map(o => {
     const priorityClass = o.priority === 'vip' ? 'priority-vip' : 'priority-standard';
     const driverLetter = o.assigned_driver_id ? o.assigned_driver_id.replace(/^driver-/, '').toUpperCase() : '—';
+    const degradedBadge = o.degraded ? '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:#451a03;color:#f97316;border:1px solid rgba(249,115,22,0.3);font-family:\'Noto Sans Mono\',monospace;text-transform:uppercase;">Degraded</span>' : '';
     return `
-      <div class="card" style="display:flex;gap:13px;align-items:flex-start;">
+      <div class="card" style="display:flex;gap:13px;align-items:flex-start;${o.degraded ? 'border-color:rgba(249,115,22,0.3);' : ''}">
         <div style="flex:1;display:flex;flex-direction:column;gap:8px;">
           <div style="display:flex;align-items:center;gap:8px;">
             <span class="${priorityClass}" style="font-size:14px;">${o.priority === 'vip' ? 'VIP' : 'Standard'}</span>
             <span style="font-size:18px;font-weight:500;color:#f8fafc;">${o.hotel}</span>
             <span class="status-pill status-${o.status}">${o.status.replace(/_/g, ' ')}</span>
+            ${degradedBadge}
           </div>
           <div style="font-size:14px;color:#92a4c3;line-height:20px;">${o.label}<br>${o.servings} servings</div>
         </div>
@@ -1503,7 +1594,7 @@ function updateAgentEvents(events, agentHealth) {
     }
   }
 
-  // Propagate offline status to Dispatch panel
+  // Propagate offline status to Dispatch panel — insert after header, not inside body
   const dispatchBox = document.getElementById('agent-box-resolver');
   let offlineBanner = dispatchBox.querySelector('.dispatch-offline-notice');
   if (agentHealth) {
@@ -1513,10 +1604,14 @@ function updateAgentEvents(events, agentHealth) {
       if (!offlineBanner) {
         offlineBanner = document.createElement('div');
         offlineBanner.className = 'dispatch-offline-notice';
-        dispatchBox.querySelector('.agent-box-body').insertAdjacentElement('afterbegin', offlineBanner);
+        // Insert after the header, before the body — so innerHTML wipes don't remove it
+        const header = dispatchBox.querySelector('.agent-box-header');
+        header.insertAdjacentElement('afterend', offlineBanner);
       }
       offlineBanner.innerHTML = `<div style="color:#e45858;font-size:12px;font-weight:500;text-transform:uppercase;margin-bottom:2px;">Service Disruption</div><div style="color:#e45858;font-size:14px;">${names} offline — dispatching with available data only</div>`;
       offlineBanner.style.display = 'block';
+      // Ensure dispatch box is active so the notice is visible
+      dispatchBox.classList.add('active');
     } else if (offlineBanner) {
       offlineBanner.style.display = 'none';
     }
@@ -1701,7 +1796,7 @@ function updateCrewDisconnectBanner(crews) {
   const disconnected = Object.values(crews).filter(c => c.disconnected);
   const recovering = Object.values(crews).filter(c => c.recovering);
 
-  const driverLabel = (id) => id.replace(/^driver-/, 'Driver-').toUpperCase();
+  const driverLabel = (id) => id.replace(/^driver-(.)/, (_, l) => 'Driver-' + l.toUpperCase());
   if (recovering.length > 0) {
     const ids = recovering.map(c => driverLabel(c.driver_id)).join(', ');
     banner.classList.add('active', 'recovering');
@@ -1732,14 +1827,31 @@ async function reconnectAgent() {
 }
 
 async function resetDemo() {
-  Object.values(crewTrails).forEach(t => t.setLatLngs([]));
-  const result = await api('reset');
+  try {
+    // Clear map trails and markers
+    Object.values(crewTrails).forEach(t => t.setLatLngs([]));
+    Object.keys(crewMarkers).forEach(id => {
+      map.removeLayer(crewMarkers[id]);
+      delete crewMarkers[id];
+    });
+    _lastCrews = null;
+
+    // Call server reset
+    const result = await api('reset');
+    console.log('Reset:', result);
+  } catch (e) {
+    console.error('Reset API error:', e);
+  }
+
+  // Force-clear UI regardless of API result
   const el = document.getElementById('worker-status');
   el.className = 'worker-indicator online';
   el.innerHTML = '<div class="worker-dot"></div><span>Service Online</span>';
+
   // Reset crew disconnect banner
   const crewBanner = document.getElementById('crew-disconnect-banner');
   crewBanner.classList.remove('active', 'recovering');
+
   // Reset agent boxes
   AGENT_IDS.forEach(agentId => {
     const box = document.getElementById(`agent-box-${agentId}`);
@@ -1748,9 +1860,17 @@ async function resetDemo() {
     box.querySelector('.agent-box-status').textContent = 'Waiting';
     box.querySelector('.agent-box-body').innerHTML = '';
   });
+  // Clear dispatch offline notice
+  const offlineNotice = document.querySelector('.dispatch-offline-notice');
+  if (offlineNotice) offlineNotice.style.display = 'none';
+
+  // Clear cards
+  document.getElementById('crew-cards').innerHTML = '';
+  document.getElementById('order-cards').innerHTML = '';
+
+  // Reset counters
   prevEventCounts = { fleet_agent: 0, customer_agent: 0, resolver: 0 };
   prevTotalCount = 0;
-  console.log('Reset:', result);
 }
 </script>
 </body>
