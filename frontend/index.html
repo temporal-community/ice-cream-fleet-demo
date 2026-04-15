@@ -75,6 +75,17 @@
     justify-content: space-between;
     padding: 0 40px;
     height: 80px;
+    position: relative;
+    overflow: hidden;
+  }
+  header::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='5' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.18;
+    mix-blend-mode: soft-light;
+    pointer-events: none;
   }
   .header-left {
     display: flex;
@@ -753,6 +764,11 @@
     border-radius: 1px;
   }
 
+  /* --- Hotel signs on map --- */
+  .hotel-sign {
+    filter: drop-shadow(0 2px 8px rgba(0,0,0,0.6));
+  }
+
   /* --- Ziggy's neon sign on map --- */
   .ziggy-neon {
     width: 140px;
@@ -1284,11 +1300,11 @@ function getBearing(prev, curr) {
 }
 
 const TRUCK_SVGS = {
-  'driver-a': '/static/img/truck_a.svg',
-  'driver-b': '/static/img/truck_b.svg',
-  'driver-c': '/static/img/truck_c.svg',
-  'driver-d': '/static/img/truck_d.svg',
-  'driver-e': '/static/img/truck_e.svg',
+  'driver-a': ['/static/img/truck_a.svg', '/static/img/truck_a.svg'],
+  'driver-b': ['/static/img/truck_b.svg', '/static/img/truck_b_west.svg'],
+  'driver-c': ['/static/img/truck_c.svg', '/static/img/truck_c_west.svg'],
+  'driver-d': ['/static/img/truck_d.svg', '/static/img/truck_d_west.svg'],
+  'driver-e': ['/static/img/truck_e.svg', '/static/img/truck_e_west.svg'],
 };
 
 // Base sizes at zoom 15
@@ -1305,17 +1321,18 @@ function crewIcon(color, isDisconnected, bearing, driverId) {
   const s = mapScale();
   const w = Math.round(BASE_TRUCK_W * s);
   const h = Math.round(BASE_TRUCK_H * s);
-  const flip = typeof bearing === 'number' && bearing > 180;
+  const westbound = typeof bearing === 'number' && bearing > 180;
   const ringSize = Math.round(68 * s);
   const ring = isDisconnected
     ? `<div style="position:absolute;top:${Math.round(-6*s)}px;left:50%;transform:translateX(-50%);width:${ringSize}px;height:${Math.round(58*s)}px;border:3px solid #ef4444;border-radius:50%;animation:pulse 1.5s infinite;z-index:0;"></div>`
     : '';
-  const truckSrc = TRUCK_SVGS[driverId] || TRUCK_SVGS['driver-a'];
+  const variants = TRUCK_SVGS[driverId] || TRUCK_SVGS['driver-a'];
+  const truckSrc = westbound ? variants[1] : variants[0];
   return L.divIcon({
     className: 'crew-marker',
     html: `<div style="position:relative;width:${w}px;height:${h}px;">
       ${ring}
-      <img src="${truckSrc}" style="width:${w}px;height:${h}px;${flip ? 'transform:scaleX(-1);' : ''}" />
+      <img src="${truckSrc}" style="width:${w}px;height:${h}px;" />
     </div>`,
     iconSize: [w, h],
     iconAnchor: [Math.round(w/2), Math.round(h/2)],
@@ -1342,12 +1359,9 @@ map.on('zoomend', () => {
   if (ziggyImg) {
     ziggyImg.style.width = Math.round(BASE_ZIGGY_W * mapScale()) + 'px';
   }
-  // Resize Vegas hotel signs
-  document.querySelectorAll('.vegas-diamond').forEach(el => {
-    const s = mapScale();
-    const size = Math.round(52 * s);
-    el.style.width = size + 'px';
-    el.style.height = size + 'px';
+  // Resize hotel signs
+  document.querySelectorAll('.hotel-sign').forEach(el => {
+    el.style.width = Math.round(BASE_SIGN_W * mapScale()) + 'px';
   });
 });
 
@@ -1372,14 +1386,28 @@ const DRIVER_COLORS = {
 };
 
 // --- Sign tooltips ---
+const HOTEL_SIGNS = {
+  'MGM Grand': '/static/img/sign_mgm.png',
+  'Caesars': '/static/img/sign_caesars.png',
+  'Caesars Palace': '/static/img/sign_caesars.png',
+  'Mandalay Bay': '/static/img/sign_mandalay.png',
+  'Cosmopolitan': '/static/img/sign_cosmopolitan.png',
+  'The Cosmopolitan': '/static/img/sign_cosmopolitan.png',
+};
+const BASE_SIGN_W = 120;
+
 function vegasSign(name, sub) {
-  return `<div class="vegas-sign">
-    <div class="vegas-star">★</div>
-    <div class="vegas-diamond">
-      <div class="vegas-name">${name}</div>
-      ${sub ? `<div class="vegas-sub">${sub}</div>` : ''}
-    </div>
-    <div class="vegas-pole"></div>
+  const signSrc = HOTEL_SIGNS[name];
+  if (signSrc) {
+    const w = Math.round(BASE_SIGN_W * mapScale());
+    return `<div style="text-align:center;">
+      <img src="${signSrc}" class="hotel-sign" style="width:${w}px;height:auto;" alt="${name}" />
+    </div>`;
+  }
+  // Fallback for unknown hotels (e.g. Cosmopolitan reroute)
+  return `<div style="text-align:center;padding:4px 10px;background:rgba(0,0,0,0.7);border:1px solid #c8a84e;border-radius:4px;">
+    <div style="color:#ffe14d;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;">${name}</div>
+    ${sub ? `<div style="color:#f0d080;font-size:10px;">${sub}</div>` : ''}
   </div>`;
 }
 

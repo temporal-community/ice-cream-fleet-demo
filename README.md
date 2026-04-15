@@ -69,58 +69,54 @@ The `run.sh` script sets up your Python environment, installs dependencies, and 
 ## Architecture
 
 ```
-┌──────────────────────────────────┐
-│         Temporal Server          │
-│   (workflow state + replay)      │
-└──────────┬───────────────────────┘
-           │
-     ┌─────┴─────────────────────────────────┐
-     │                                       │
-┌────▼─────────────────────────────────┐ ┌───▼──────────────────────────┐
-│  Worker process (3 workers)          │ │  Server process              │
-│                                      │ │  FastAPI + WebSocket         │
-│  meltdown-workflows worker           │ │                              │
-│  ├─ MeltdownDemoWorkflow (state)     │ │  Queries Temporal for state: │
-│  │    ├─ owns driver positions,      │ │  ├─ MeltdownDemoWorkflow     │
-│  │    │   order assignments          │ │  │   .get_status             │
-│  │    ├─ builds DriverSnapshots      │ │  └─ DriverRouteWorkflow     │
-│  │    ├─ _run_adk_assignment()       │ │      .get_status             │
-│  │    │   inline (live mode)         │ │                              │
-│  │    ├─ OrderGenerationWorkflow     │ │  Sends signals only:         │
-│  │    │   child (timer + orders)     │ │  disconnect, reconnect,      │
-│  │    └─ DriverRouteWorkflow x5      │ │  customer change, start      │
-│  │        child workflows            │ │                              │
-│  └─ DriverRouteWorkflow              │ │  No workers, no FleetState   │
-│       ├─ owns disconnect state       │ └──────────────────────────────┘
-│       │   (Temporal retry pattern)   │
-│       ├─ tracks status, path_history,│
-│       │   is_disconnected,           │
-│       │   is_recovering,             │
-│       │   current_orders             │
-│       ├─ navigate_to() → DELIVERY    │
-│       ├─ pickup_orders() → DELIVERY  │
-│       ├─ deliver_order() → DELIVERY  │
-│       └─ signals parent on complete  │
-│                                      │
-│  meltdown-delivery worker (max 20)   │
-│  └─ navigation, pickup, deliver,     │
-│     order generation, changes        │
-│                                      │
-│  meltdown-agents worker (max 5)      │
-│  └─ ADK tool activities              │
-│       (via TemporalModel):           │
-│       ParallelAgent:                 │
-│       ├─ Fleet Agent                 │
-│       │   tool_get_fleet_status      │
-│       │   tool_get_route_info (Maps) │
-│       └─ Customer Agent              │
-│           tool_get_order_priorities  │
-│           google_search (grounding)  │
-│       Dispatch Agent →               │
-│         tool_submit_assignment       │
-│       TemporalModel(→AGENTS_QUEUE)   │
-└──────────────────────────────────────┘
+                        ┌─────────────────────────┐
+                        │     Temporal Server      │
+                        │   event log + replay     │
+                        └────────────┬────────────┘
+                                     │
+                ┌────────────────────┼────────────────────┐
+                │                    │                    │
+                ▼                    ▼                    ▼
+   ┌─────────────────────┐  ┌───────────────┐  ┌──────────────────┐
+   │   Workflow Worker    │  │Delivery Worker│  │  Agents Worker   │
+   │  meltdown-workflows │  │meltdown-deliv.│  │ meltdown-agents  │
+   └─────────┬───────────┘  └───────┬───────┘  └────────┬─────────┘
+             │                      │                    │
+             │                      │                    │
+   ┌─────────▼───────────┐  ┌──────▼────────┐  ┌────────▼─────────┐
+   │ MeltdownDemoWorkflow │  │  Activities:  │  │  ADK Agents      │
+   │                      │  │  navigate_to  │  │  (via Temporal-  │
+   │  OrderGeneration ◄───┤  │  pickup_orders│  │   Model):        │
+   │    (child, timer)    │  │  deliver_order│  │                  │
+   │                      │  │  get_route_   │  │  ┌────┐ ┌────┐  │
+   │  Driver-A ◄──────────┤  │   polyline    │  │  │Fleet│ │Cust│  │
+   │  Driver-B ◄──────────┤  │  generate_    │  │  │Agent│ │Agnt│  │
+   │  Driver-C ◄──────────┤  │   order       │  │  └──┬─┘ └─┬──┘  │
+   │  Driver-D ◄──────────┤  │  sync_driver_ │  │     └──┬──┘     │
+   │  Driver-E ◄──────────┤  │   position    │  │  ┌─────▼─────┐  │
+   │  (child workflows)   │  │  execute_     │  │  │ Dispatch   │  │
+   │                      │  │   customer_   │  │  │  Agent     │  │
+   │  ADK runs inline:    │  │   change      │  │  └───────────┘  │
+   │  _run_adk_assignment │  └───────────────┘  │                  │
+   │  (live mode)         │                     │  invoke_model    │
+   └──────────────────────┘                     │  tool_get_fleet  │
+                                                │  tool_get_route  │
+   ┌──────────────────────┐                     │  tool_get_order  │
+   │   Server Process     │                     │  google_search   │
+   │   FastAPI + WS       │                     └──────────────────┘
+   │                      │
+   │  Queries workflows   │   ┌──────────────────────────────────┐
+   │  for state (no       │   │         Frontend (SPA)           │
+   │  workers, no         │◄──┤  Leaflet map + WebSocket feed    │
+   │  FleetState reads)   │   │  Agent reasoning panels          │
+   │                      │   │  Fleet/order status cards         │
+   │  Sends signals:      │   └──────────────────────────────────┘
+   │  start, disconnect,  │
+   │  reconnect, change   │
+   └──────────────────────┘
 ```
+
+**Order lifecycle:** Order generates on timer → ADK agents reason (Fleet + Customer in parallel → Dispatch) → capacity check + assignment → driver batch-picks up at Ziggy's → delivers sequentially to hotels → signals parent on each completion → returns to base
 
 **How ADK and Temporal map to each other:**
 
