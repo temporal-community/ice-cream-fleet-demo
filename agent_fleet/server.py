@@ -61,8 +61,8 @@ async def _cancel_running_workflows() -> None:
         return
     # Terminate main workflow and all Driver routes
     workflow_ids = ["meltdown-demo"]
-    for i in range(1, 4):
-        workflow_ids.append(f"route-driver-{i}")
+    for letter in ["a", "b", "c", "d", "e"]:
+        workflow_ids.append(f"route-driver-{letter}")
     for wf_id in workflow_ids:
         try:
             handle = _temporal_client.get_workflow_handle(wf_id)
@@ -139,7 +139,7 @@ async def reset_demo():
 
 
 class DriverDisconnectRequest(BaseModel):
-    driver_id: str = "driver-1"
+    driver_id: str = "driver-a"
 
 
 @app.post("/api/disconnect-crew")

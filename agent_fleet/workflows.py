@@ -79,6 +79,7 @@ ORDER_INTERVAL_SECONDS = 10
 
 PARENT_WORKFLOW_ID = "meltdown-demo"
 DRIVER_CAPACITY = 3
+DRIVER_IDS = ["driver-a", "driver-b", "driver-c", "driver-d", "driver-e"]
 
 
 # --- Per-driver continuous delivery workflow ---
@@ -257,7 +258,7 @@ class DriverRouteWorkflow:
                     get_route_polyline,
                     args=[self._current_lat, self._current_lng, WAREHOUSE.lat, WAREHOUSE.lng],
                     task_queue=DELIVERY_QUEUE,
-                    summary=f"[#{onum}] Calculating route to Frosty's",
+                    summary=f"[#{onum}] Calculating route to Ziggy's",
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
@@ -276,7 +277,7 @@ class DriverRouteWorkflow:
                         start_lat=self._current_lat,
                         start_lng=self._current_lng,
                     ),
-                    summary=f"[#{onum}] Driving to Frosty's",
+                    summary=f"[#{onum}] Driving to Ziggy's",
                 )
                 self._current_lat = nav_result.final_lat
                 self._current_lng = nav_result.final_lng
@@ -302,7 +303,7 @@ class DriverRouteWorkflow:
                         order_ids=[order.order_id],
                     ),
                     task_queue=DELIVERY_QUEUE,
-                    summary=f"[#{onum}] Loading order at Frosty's",
+                    summary=f"[#{onum}] Loading order at Ziggy's",
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=NAV_RETRY,
@@ -426,7 +427,7 @@ class DriverRouteWorkflow:
                     get_route_polyline,
                     args=[self._current_lat, self._current_lng, WAREHOUSE.lat, WAREHOUSE.lng],
                     task_queue=DELIVERY_QUEUE,
-                    summary="Calculating return to Frosty's",
+                    summary="Calculating return to Ziggy's",
                     schedule_to_close_timeout=timedelta(minutes=5),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=FAST_RETRY,
@@ -444,7 +445,7 @@ class DriverRouteWorkflow:
                         start_lat=self._current_lat,
                         start_lng=self._current_lng,
                     ),
-                    summary="Returning to Frosty's",
+                    summary="Returning to Ziggy's",
                 )
                 self._current_lat = nav_result.final_lat
                 self._current_lng = nav_result.final_lng
@@ -641,7 +642,7 @@ class MeltdownDemoWorkflow:
     def _build_driver_snapshots(self) -> list[DriverSnapshot]:
         """Build driver snapshots from workflow state for activity inputs."""
         snapshots = []
-        for driver_id in ["driver-1", "driver-2", "driver-3", "driver-4", "driver-5"]:
+        for driver_id in DRIVER_IDS:
             pos = self._driver_last_position.get(driver_id, (WAREHOUSE.lat, WAREHOUSE.lng))
             order_count = len(self._driver_orders.get(driver_id, []))
             snapshots.append(
@@ -665,15 +666,13 @@ class MeltdownDemoWorkflow:
         self._use_mock_assignment = inp.use_mock_assignment
 
         # Initialize driver state
-        for i in range(1, 6):
-            driver_id = f"driver-{i}"
+        for driver_id in DRIVER_IDS:
             self._driver_orders[driver_id] = []
             self._driver_last_position[driver_id] = (WAREHOUSE.lat, WAREHOUSE.lng)
 
         # Start 5 driver child workflows
         self._route_handles = {}
-        for i in range(1, 6):
-            driver_id = f"driver-{i}"
+        for driver_id in DRIVER_IDS:
             handle = await workflow.start_child_workflow(
                 DriverRouteWorkflow.run,
                 DriverRouteInput(driver_id=driver_id),
