@@ -558,11 +558,11 @@ class OrderGenerationWorkflow:
                 f"Order {order_num}/{inp.max_orders}: {order.order_id} signaled to parent"
             )
 
-            # Wait before next order — first 3 orders come fast, then normal cadence
+            # Wait before next order — initial burst to fill driver batches, then normal cadence
             if order_num < inp.max_orders:
-                if order_num <= 3:
-                    # Initial burst: 2s between first 3 orders to get multiple drivers moving
-                    await workflow.sleep(timedelta(seconds=2))
+                if order_num <= 8:
+                    # Fast burst: 8 orders in ~10s to get multi-order batches on drivers
+                    await workflow.sleep(timedelta(seconds=1))
                 else:
                     base = inp.order_interval_seconds
                     jitter = int(workflow.random().random() * base * 0.6)  # 0–60% jitter

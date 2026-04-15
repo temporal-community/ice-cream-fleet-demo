@@ -179,6 +179,9 @@ Use this framing at the start of the talk before any demo:
 **"Is this production-ready?"**
 > "The pattern is production-ready — Temporal runs at Stripe, Netflix, Uber. ADK is Google's framework for building agents at scale. The integration shown here (`TemporalModel`, `activity_tool`, `GoogleAdkPlugin`) is the `temporalio[google-adk]` package, which is the official integration."
 
+**"Why does the Fleet Agent sometimes fail on the ETA assessment?"**
+> "That's the Google Maps Directions API — `tool_get_route_info` makes a real API call for driving ETAs. It can fail from rate limiting, quota exhaustion, or transient network errors. But watch what happens: the error is returned to the LLM, not swallowed. The Fleet Agent reasons about the failure, and the Dispatch Agent assigns based on whatever data it has. That's the graceful degradation pattern — every tool call is a Temporal activity with its own retry policy. If it exhausts retries, the error flows back to the agent as context."
+
 ---
 
 ## Reset Between Demos
