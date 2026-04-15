@@ -25,7 +25,7 @@ from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityConfig
 
 from agent_fleet._activity_tool import activity_tool
-from agent_fleet._demo_model import DemoTemporalModel
+from agent_fleet._demo_model import DemoTemporalModel as TemporalModel
 from agent_fleet.activities import (
     tool_get_fleet_status,
     tool_get_order_priorities,
@@ -105,7 +105,7 @@ def create_assignment_fleet_agent() -> Agent:
     """
     return Agent(
         name="assignment_fleet_agent",
-        model=DemoTemporalModel(
+        model=TemporalModel(
             DEFAULT_MODEL,
             activity_config=ActivityConfig(
                 task_queue=AGENTS_QUEUE,
@@ -141,7 +141,7 @@ def create_assignment_customer_agent() -> Agent:
     """
     return Agent(
         name="assignment_customer_agent",
-        model=DemoTemporalModel(
+        model=TemporalModel(
             DEFAULT_MODEL,
             activity_config=ActivityConfig(
                 task_queue=AGENTS_QUEUE,
@@ -178,7 +178,7 @@ def create_assignment_dispatch_agent() -> Agent:
     """
     return Agent(
         name="assignment_dispatch_agent",
-        model=DemoTemporalModel(
+        model=TemporalModel(
             DEFAULT_MODEL,
             activity_config=ActivityConfig(
                 task_queue=AGENTS_QUEUE,
