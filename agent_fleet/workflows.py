@@ -117,6 +117,7 @@ class DriverRouteWorkflow:
         self._active_order_id: str | None = None
         self._reroute_pending: dict | None = None  # {"lat": float, "lng": float}
         self._cancel_pending: bool = False
+        self._batch_orders: list[DriverRouteOrder] = []  # orders collected for current batch
 
     # --- Signals ---
 
@@ -145,7 +146,7 @@ class DriverRouteWorkflow:
 
     @workflow.signal
     async def update_order(self, inp: OrderUpdateInput) -> None:
-        """Update delivery coordinates — works for both pending and active orders."""
+        """Update delivery coordinates — works for pending, batched, and active orders."""
         # Check pending orders first
         for order in self._pending_orders:
             if order.order_id == inp.order_id:
@@ -153,6 +154,14 @@ class DriverRouteWorkflow:
                     order.delivery_lat = inp.new_lat
                     order.delivery_lng = inp.new_lng
                 workflow.logger.info(f"Order {inp.order_id} updated (pending) — new destination")
+                return
+        # Check batched orders (collected but not yet being delivered)
+        for order in self._batch_orders:
+            if order.order_id == inp.order_id:
+                if inp.new_lat is not None and inp.new_lng is not None:
+                    order.delivery_lat = inp.new_lat
+                    order.delivery_lng = inp.new_lng
+                workflow.logger.info(f"Order {inp.order_id} updated (batched) — new destination")
                 return
         # If order is currently being delivered, flag for reroute
         if self._active_order_id == inp.order_id:
@@ -166,12 +175,26 @@ class DriverRouteWorkflow:
 
     @workflow.signal
     async def cancel_order(self, inp: OrderUpdateInput) -> None:
-        """Cancel an order — works for both pending and active orders."""
+        """Cancel an order — works for pending, batched, and active orders."""
         # Check pending orders
         before = len(self._pending_orders)
         self._pending_orders = [o for o in self._pending_orders if o.order_id != inp.order_id]
         if len(self._pending_orders) < before:
             workflow.logger.info(f"Order {inp.order_id} cancelled — removed from pending queue")
+            try:
+                self._current_orders.remove(inp.order_id)
+            except ValueError:
+                pass
+            return
+        # Check batched orders (collected but not yet being delivered)
+        before = len(self._batch_orders)
+        self._batch_orders = [o for o in self._batch_orders if o.order_id != inp.order_id]
+        if len(self._batch_orders) < before:
+            workflow.logger.info(f"Order {inp.order_id} cancelled — removed from batch")
+            try:
+                self._current_orders.remove(inp.order_id)
+            except ValueError:
+                pass
             return
         # If order is currently being delivered, flag for cancel
         if self._active_order_id == inp.order_id:
@@ -263,13 +286,13 @@ class DriverRouteWorkflow:
                 )
 
             # --- Batch pickup: collect all pending orders, drive to shop once ---
-            batch = []
+            self._batch_orders = []
             while self._pending_orders:
-                batch.append(self._pending_orders.pop(0))
-            if not batch:
+                self._batch_orders.append(self._pending_orders.pop(0))
+            if not self._batch_orders:
                 continue
             order_ids_str = ", ".join(
-                f"#{o.order_id.split('-', 1)[-1]}" for o in batch
+                f"#{o.order_id.split('-', 1)[-1]}" for o in self._batch_orders
             )
 
             # Navigate to shop for pickup (skip if already there)
@@ -292,7 +315,7 @@ class DriverRouteWorkflow:
                     driver_id,
                     NavigateInput(
                         driver_id=driver_id,
-                        order_id=batch[0].order_id,
+                        order_id=self._batch_orders[0].order_id,
                         target_lat=WAREHOUSE.lat,
                         target_lng=WAREHOUSE.lng,
                         leg="pickup",
@@ -315,10 +338,10 @@ class DriverRouteWorkflow:
                 pickup_orders,
                 PickupInput(
                     driver_id=driver_id,
-                    order_ids=[o.order_id for o in batch],
+                    order_ids=[o.order_id for o in self._batch_orders],
                 ),
                 task_queue=DELIVERY_QUEUE,
-                summary=f"[{order_ids_str}] Loading {len(batch)} order(s) at Ziggy's",
+                summary=f"[{order_ids_str}] Loading {len(self._batch_orders)} order(s) at Ziggy's",
                 schedule_to_close_timeout=timedelta(minutes=5),
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=NAV_RETRY,
@@ -327,7 +350,8 @@ class DriverRouteWorkflow:
             self._current_lat, self._current_lng = WAREHOUSE.lat, WAREHOUSE.lng
 
             # --- Deliver each order sequentially ---
-            for order in batch:
+            while self._batch_orders:
+                order = self._batch_orders.pop(0)
                 self._active_order_id = order.order_id
                 self._reroute_pending = None
                 self._cancel_pending = False
@@ -1104,6 +1128,11 @@ class MeltdownDemoWorkflow:
                             change_type=change.change_type,
                         ),
                     )
+                    # Free the capacity slot so the driver can accept new orders
+                    try:
+                        self._driver_orders[driver_id].remove(change.order_id)
+                    except (KeyError, ValueError):
+                        pass
                 else:
                     await self._route_handles[driver_id].signal(
                         DriverRouteWorkflow.update_order,
