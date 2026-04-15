@@ -24,6 +24,7 @@ from agent_fleet.activities import (
     navigate_to,
     pickup_orders,
     publish_agent_event,
+    sync_driver_position,
 )
 from agent_fleet.locations import VENUES
 from agent_fleet.mock.activities import mock_get_route_polyline
@@ -64,6 +65,7 @@ async def run_delivery_workers(env: WorkflowEnvironment):
             get_fleet_status,
             get_order_priorities,
             publish_agent_event,
+            sync_driver_position,
         ],
     )
 
