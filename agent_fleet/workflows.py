@@ -462,22 +462,31 @@ class DriverRouteWorkflow:
                     {"lat": nav_result.final_lat, "lng": nav_result.final_lng}
                 )
 
-                # --- HITL hold: if a customer change is pending, wait for decision ---
+                # --- HITL hold: always check before delivery ---
+                # wait_condition passes instantly if no update pending.
+                # If update_pending becomes True at any point (even during
+                # navigation), this catches it before deliver_order runs.
                 if self._update_pending:
                     self._status = "awaiting_update"
                     workflow.logger.info(
-                        f"[{order.order_id}] Holding at {order.hotel} — awaiting HITL decision"
+                        f"[{order.order_id}] Holding at {order.hotel} "
+                        f"— awaiting HITL decision"
                     )
-                    await workflow.wait_condition(
-                        lambda: self._update_decision is not None
-                    )
+                await workflow.wait_condition(
+                    lambda: not self._update_pending
+                    or self._update_decision is not None
+                )
 
+                # Process decision if one was made
+                if self._update_decision is not None:
                     decision = self._update_decision
                     self._update_pending = False
                     self._update_decision = None
 
                     if decision == "cancel":
-                        workflow.logger.info(f"[{order.order_id}] HITL cancel approved")
+                        workflow.logger.info(
+                            f"[{order.order_id}] HITL cancel approved"
+                        )
                         self._cancel_pending = True
                     elif decision == "address_change":
                         # Reroute: update destination and re-navigate
