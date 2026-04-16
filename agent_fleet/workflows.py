@@ -540,6 +540,21 @@ class DriverRouteWorkflow:
                         retry_policy=NAV_RETRY,
                     )
                     delivered.append(order.order_id)
+
+                    # Signal parent — only when delivery actually happened
+                    if workflow.info().parent:
+                        parent = workflow.get_external_workflow_handle(
+                            PARENT_WORKFLOW_ID
+                        )
+                        await parent.signal(
+                            "order_delivered",
+                            OrderDeliveredInput(
+                                driver_id=driver_id,
+                                order_id=order.order_id,
+                                delivery_lat=order.delivery_lat,
+                                delivery_lng=order.delivery_lng,
+                            ),
+                        )
                 else:
                     workflow.logger.info(
                         f"[{order.order_id}] Delivery skipped — cancelled"
@@ -553,23 +568,6 @@ class DriverRouteWorkflow:
                     self._current_orders.remove(order.order_id)
                 except ValueError:
                     pass
-
-                # Signal parent workflow that delivery is complete
-                try:
-                    parent = workflow.get_external_workflow_handle(PARENT_WORKFLOW_ID)
-                    await parent.signal(
-                        "order_delivered",
-                        OrderDeliveredInput(
-                            driver_id=driver_id,
-                            order_id=order.order_id,
-                            delivery_lat=order.delivery_lat,
-                            delivery_lng=order.delivery_lng,
-                        ),
-                    )
-                except Exception as e:
-                    workflow.logger.warning(
-                        f"Could not signal parent for {order.order_id} delivery: {e}"
-                    )
 
             # All orders in batch delivered — drive back to base if not already there
             at_warehouse = (
