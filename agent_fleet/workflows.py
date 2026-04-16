@@ -270,9 +270,11 @@ class DriverRouteWorkflow:
             if self._stop:
                 break
 
-            # Collection window: wait briefly to accumulate more orders
-            # before starting the pickup trip (allows multi-order batching)
-            await workflow.sleep(timedelta(seconds=4))
+            # Brief pause to let concurrent assignments land before collecting.
+            # The real batching happens naturally: orders assigned while the
+            # driver is navigating to Ziggy's accumulate in _pending_orders
+            # and get scooped into the batch at pickup time.
+            await workflow.sleep(timedelta(seconds=2))
 
             # --- Position sync after reconnect ---
             if self._position_sync_needed:
@@ -335,6 +337,13 @@ class DriverRouteWorkflow:
                 self._path_history.append(
                     {"lat": nav_result.final_lat, "lng": nav_result.final_lng}
                 )
+
+            # Scoop up any orders that arrived while driving to Ziggy's
+            while self._pending_orders:
+                self._batch_orders.append(self._pending_orders.pop(0))
+            order_ids_str = ", ".join(
+                f"#{o.order_id.split('-', 1)[-1]}" for o in self._batch_orders
+            )
 
             # Batch pickup all orders at once
             self._status = "picking_up"
@@ -709,10 +718,18 @@ class MeltdownDemoWorkflow:
 
     # --- Helpers ---
 
+    # First N orders use only 3 drivers so A-C warm up with single
+    # deliveries while D-E accumulate batched orders naturally.
+    _WARMUP_ORDERS = 5
+
     def _build_driver_snapshots(self) -> list[DriverSnapshot]:
         """Build driver snapshots from workflow state for activity inputs."""
         snapshots = []
+        warming_up = self._orders_generated < self._WARMUP_ORDERS
         for driver_id in DRIVER_IDS:
+            # During warmup, hide drivers D-E so agents only assign to A-C
+            if warming_up and driver_id in ("driver-d", "driver-e"):
+                continue
             pos = self._driver_last_position.get(driver_id, (WAREHOUSE.lat, WAREHOUSE.lng))
             order_count = len(self._driver_orders.get(driver_id, []))
             snapshots.append(

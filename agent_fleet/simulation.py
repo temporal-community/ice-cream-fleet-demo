@@ -429,8 +429,30 @@ class FleetState:
         await conn.commit()
 
     async def complete_order_delivery(self, driver_id: str, order_id: str) -> int:
-        """Mark an order delivered and remove it from the driver's active queue."""
+        """Mark an order delivered and remove it from the driver's active queue.
+
+        Skips status update if the order was already cancelled (race with HITL cancel).
+        """
         conn = await self._get_conn()
+        # Don't overwrite CANCELLED status — cancel may have arrived during delivery
+        async with conn.execute(
+            "SELECT status FROM orders WHERE order_id=?", (order_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row and row["status"] == OrderStatus.CANCELLED.value:
+                # Order was cancelled while being delivered — don't mark as delivered
+                await conn.execute(
+                    "DELETE FROM driver_orders WHERE driver_id=? AND order_id=?",
+                    (driver_id, order_id),
+                )
+                await conn.commit()
+                async with conn.execute(
+                    "SELECT COUNT(*) as cnt FROM driver_orders WHERE driver_id=?",
+                    (driver_id,),
+                ) as c2:
+                    r2 = await c2.fetchone()
+                    return r2["cnt"] if r2 else 0
+
         await conn.execute(
             "UPDATE orders SET status=? WHERE order_id=?",
             (OrderStatus.DELIVERED.value, order_id),
