@@ -115,13 +115,13 @@ class DriverRouteWorkflow:
         self._path_history: list[dict] = []
         self._is_recovering: bool = False
         self._position_sync_needed: bool = False
-        # HITL: update pending + decision tracking
+        # HITL: update pending + decision tracking (order-specific)
         self._active_order_id: str | None = None
-        self._update_pending: bool = False  # change submitted, awaiting decision
-        self._update_decision: str | None = None  # "cancel", "reroute", "release"
+        self._update_pending_order: str | None = None  # order_id with pending change
+        self._update_decision: str | None = None  # "cancel", "address_change", "release"
         self._update_new_lat: float | None = None
         self._update_new_lng: float | None = None
-        self._cancel_pending: bool = False  # for pending/batched order cancels
+        self._cancel_pending: bool = False
         self._batch_orders: list[DriverRouteOrder] = []
 
     # --- Signals ---
@@ -152,21 +152,10 @@ class DriverRouteWorkflow:
     @workflow.signal
     async def update_pending(self, inp: OrderUpdateInput) -> None:
         """Signal that a customer change is submitted — driver should hold before delivery."""
-        if self._active_order_id == inp.order_id:
-            self._update_pending = True
-            workflow.logger.info(
-                f"Order {inp.order_id} — update pending, driver will hold before delivery"
-            )
-        else:
-            # Order not yet active — update pending/batched orders directly
-            for order in self._pending_orders + self._batch_orders:
-                if order.order_id == inp.order_id:
-                    self._update_pending = True
-                    workflow.logger.info(
-                        f"Order {inp.order_id} — update pending (queued)"
-                    )
-                    return
-            workflow.logger.info(f"Order {inp.order_id} not found for hold")
+        self._update_pending_order = inp.order_id
+        workflow.logger.info(
+            f"Order {inp.order_id} — update pending, will hold before delivery"
+        )
 
     @workflow.signal
     async def resolve_update(self, inp: OrderUpdateInput) -> None:
@@ -462,25 +451,24 @@ class DriverRouteWorkflow:
                     {"lat": nav_result.final_lat, "lng": nav_result.final_lng}
                 )
 
-                # --- HITL hold: always check before delivery ---
-                # wait_condition passes instantly if no update pending.
-                # If update_pending becomes True at any point (even during
-                # navigation), this catches it before deliver_order runs.
-                if self._update_pending:
+                # --- HITL hold: check for pending customer change ---
+                # Server signals update_pending directly (same pattern as
+                # disconnect). No grace period needed — signal arrives
+                # before any parent processing delay.
+                if self._update_pending_order == order.order_id:
                     self._status = "awaiting_update"
                     workflow.logger.info(
                         f"[{order.order_id}] Holding at {order.hotel} "
                         f"— awaiting HITL decision"
                     )
-                await workflow.wait_condition(
-                    lambda: not self._update_pending
-                    or self._update_decision is not None
-                )
+                    await workflow.wait_condition(
+                        lambda: self._update_decision is not None
+                    )
 
                 # Process decision if one was made
                 if self._update_decision is not None:
                     decision = self._update_decision
-                    self._update_pending = False
+                    self._update_pending_order = None
                     self._update_decision = None
 
                     if decision == "cancel":
@@ -1260,6 +1248,19 @@ class MeltdownDemoWorkflow:
 
     async def _process_customer_change(self, change: CustomerChangeInput) -> None:
         cnum = change.order_id.split("-", 1)[-1]
+
+        # Signal child FIRST to hold delivery — before any local activities
+        # that could delay the signal past the child's grace period
+        driver_id = self._find_driver_for_order(change.order_id)
+        if driver_id and driver_id in self._route_handles:
+            await self._route_handles[driver_id].signal(
+                DriverRouteWorkflow.update_pending,
+                OrderUpdateInput(
+                    order_id=change.order_id,
+                    change_type=change.change_type,
+                ),
+            )
+
         await workflow.execute_local_activity(
             publish_agent_event,
             PublishAgentEventInput(
@@ -1272,17 +1273,6 @@ class MeltdownDemoWorkflow:
             ),
             start_to_close_timeout=timedelta(seconds=10),
         )
-
-        # Signal child to hold delivery while we wait for human approval
-        driver_id = self._find_driver_for_order(change.order_id)
-        if driver_id and driver_id in self._route_handles:
-            await self._route_handles[driver_id].signal(
-                DriverRouteWorkflow.update_pending,
-                OrderUpdateInput(
-                    order_id=change.order_id,
-                    change_type=change.change_type,
-                ),
-            )
 
         # Wait for human approval — workflow pauses here, everything else keeps running
         await workflow.wait_condition(lambda: len(self._pending_approvals) > 0)
