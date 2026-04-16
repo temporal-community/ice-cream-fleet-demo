@@ -1022,19 +1022,7 @@ class MeltdownDemoWorkflow:
                 retry_policy=FAST_RETRY,
             )
         else:
-            # Workflow-level retry: if the LLM doesn't call tool_submit_assignment,
-            # re-run the ADK pipeline. Individual LLM/tool activities inside are
-            # already retried by Temporal — this handles the case where the LLM
-            # succeeds but doesn't follow instructions.
-            max_adk_attempts = 3
-            for attempt in range(1, max_adk_attempts + 1):
-                assignment = await self._run_adk_assignment(assignment_input)
-                if assignment.driver_id:
-                    break
-                workflow.logger.warning(
-                    f"ADK attempt {attempt}/{max_adk_attempts} did not produce "
-                    f"assignment for {order.order_id} — retrying"
-                )
+            assignment = await self._run_adk_assignment(assignment_input)
         # Determine if this is a degraded assignment (Fleet Agent offline)
         fleet_offline = "fleet_agent" in self._disconnected_agents
 
