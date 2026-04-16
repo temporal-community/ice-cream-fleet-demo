@@ -385,6 +385,12 @@ async def deliver_order(inp: DeliverInput) -> DeliverOutput:
     CANCELLED is a terminal state — update_order_status and
     complete_order_delivery both refuse to overwrite it.
     """
+    # Fail-fast if disconnected — don't mutate visible state before checking
+    if await fleet.is_driver_disconnected(inp.driver_id):
+        raise RuntimeError(
+            f"Driver {inp.driver_id} disconnected — cannot deliver"
+        )
+
     await fleet.set_driver_status(inp.driver_id, DriverStatus.DELIVERING)
     await fleet.update_order_status(inp.order_id, OrderStatus.IN_TRANSIT, "Delivering")
 
@@ -395,9 +401,11 @@ async def deliver_order(inp: DeliverInput) -> DeliverOutput:
     if remaining_count == 0:
         await fleet.set_driver_status(inp.driver_id, DriverStatus.IDLE)
 
-    # Delivery done — but can't report if disconnected
+    # Final disconnect check — delivery committed but can't report
     if await fleet.is_driver_disconnected(inp.driver_id):
-        raise RuntimeError(f"Driver {inp.driver_id} delivered but cannot report — disconnected")
+        raise RuntimeError(
+            f"Driver {inp.driver_id} delivered but cannot report — disconnected"
+        )
 
     activity.logger.info(f"{inp.driver_id} delivered {inp.order_id}")
     return DeliverOutput(driver_id=inp.driver_id, order_id=inp.order_id, success=True)

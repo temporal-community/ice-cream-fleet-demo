@@ -460,6 +460,11 @@ class DriverRouteWorkflow:
                     break  # No reroute — proceed to deliver
 
                 # Deliver (skip if cancelled)
+                workflow.logger.info(
+                    f"[{order.order_id}] post-nav: "
+                    f"cancel={self._cancel_pending}, "
+                    f"disconn={self._is_disconnected}"
+                )
                 if not self._cancel_pending:
                     self._status = "delivering"
                     await workflow.execute_activity(
@@ -475,6 +480,10 @@ class DriverRouteWorkflow:
                         retry_policy=NAV_RETRY,
                     )
                     delivered.append(order.order_id)
+                else:
+                    workflow.logger.warning(
+                        f"[{order.order_id}] SKIPPED deliver — cancel_pending was True"
+                    )
 
                 self._active_order_id = None
                 self._cancel_pending = False
@@ -503,11 +512,15 @@ class DriverRouteWorkflow:
                     )
 
             # All orders in batch delivered — drive back to base if not already there
-            if (
-                abs(self._current_lat - WAREHOUSE.lat) > 0.001
-                or abs(self._current_lng - WAREHOUSE.lng) > 0.001
-            ):
-                self._status = "returning"
+            at_warehouse = (
+                abs(self._current_lat - WAREHOUSE.lat) < 0.001
+                and abs(self._current_lng - WAREHOUSE.lng) < 0.001
+            )
+            workflow.logger.info(
+                f"Batch done. pos=({self._current_lat:.4f}, {self._current_lng:.4f}), "
+                f"at_warehouse={at_warehouse}"
+            )
+            if not at_warehouse:
                 return_waypoints = await workflow.execute_activity(
                     get_route_polyline,
                     args=[self._current_lat, self._current_lng, WAREHOUSE.lat, WAREHOUSE.lng],
@@ -1095,8 +1108,13 @@ class MeltdownDemoWorkflow:
             retry_policy=FAST_RETRY,
         )
 
-        # Update workflow-owned driver state
-        if driver_id in self._driver_orders:
+        # Update workflow-owned driver state (skip if already assigned —
+        # prevents duplicate signals when fallback re-assigns to same driver)
+        already_assigned = (
+            driver_id in self._driver_orders
+            and order.order_id in self._driver_orders[driver_id]
+        )
+        if driver_id in self._driver_orders and not already_assigned:
             self._driver_orders[driver_id].append(order.order_id)
 
         # Update order tracking
@@ -1104,8 +1122,13 @@ class MeltdownDemoWorkflow:
             self._orders[order.order_id]["assigned_driver_id"] = driver_id
             self._orders[order.order_id]["status"] = "assigned"
 
-        # Signal the chosen driver
-        if driver_id in self._route_handles:
+        # Signal the chosen driver (skip if already assigned to avoid
+        # duplicate add_order that causes re-delivery after reconnect)
+        if already_assigned:
+            workflow.logger.info(
+                f"{order.order_id} already on {driver_id} — skipping signal"
+            )
+        elif driver_id in self._route_handles:
             await self._route_handles[driver_id].signal(
                 DriverRouteWorkflow.add_order,
                 DriverRouteOrder(
