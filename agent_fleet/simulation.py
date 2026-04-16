@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS drivers (
     capacity INTEGER NOT NULL DEFAULT 3,
     disconnected INTEGER NOT NULL DEFAULT 0,
     recovering INTEGER NOT NULL DEFAULT 0,
-    status_before_disconnect TEXT NOT NULL DEFAULT 'idle'
+    status_before_disconnect TEXT NOT NULL DEFAULT 'idle',
+    warmup_hidden INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS driver_orders (
@@ -160,6 +161,20 @@ class FleetState:
             await conn.execute(f"DELETE FROM {table}")  # noqa: S608
         await conn.commit()
         await self._seed_initial_state()
+
+    # --- Warmup visibility ---
+
+    async def set_drivers_warmup_hidden(
+        self, driver_ids: list[str], hidden: bool = True
+    ) -> None:
+        """Hide/show drivers during warmup phase."""
+        conn = await self._get_conn()
+        for did in driver_ids:
+            await conn.execute(
+                "UPDATE drivers SET warmup_hidden=? WHERE driver_id=?",
+                (1 if hidden else 0, did),
+            )
+        await conn.commit()
 
     # --- Per-driver disconnect / reconnect ---
 
@@ -405,24 +420,30 @@ class FleetState:
     async def assign_order_to_driver(
         self, driver_id: str, order_id: str, *, degraded: bool = False
     ) -> None:
-        """Assign a single order to a driver."""
+        """Assign a single order to a driver.
+
+        Won't overwrite terminal states (CANCELLED/DELIVERED).
+        """
         conn = await self._get_conn()
-        await conn.execute(
-            "UPDATE orders SET assigned_driver_id=?, status=?, degraded=? WHERE order_id=?",
-            (driver_id, OrderStatus.ASSIGNED.value, 1 if degraded else 0, order_id),
+        cursor = await conn.execute(
+            "UPDATE orders SET assigned_driver_id=?, status=?, degraded=? "
+            "WHERE order_id=? AND status NOT IN (?, ?)",
+            (driver_id, OrderStatus.ASSIGNED.value, 1 if degraded else 0,
+             order_id, OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value),
         )
-        await conn.execute(
-            "INSERT OR IGNORE INTO driver_orders (driver_id, order_id) VALUES (?, ?)",
-            (driver_id, order_id),
-        )
-        msg = f"Assigned to {driver_id}"
-        if degraded:
-            msg += " (degraded — no fleet visibility)"
-        await conn.execute(
-            "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
-            (order_id, msg),
-        )
-        await self._log_event(conn, f"Order {order_id} assigned to {driver_id}")
+        if cursor.rowcount > 0:
+            await conn.execute(
+                "INSERT OR IGNORE INTO driver_orders (driver_id, order_id) VALUES (?, ?)",
+                (driver_id, order_id),
+            )
+            msg = f"Assigned to {driver_id}"
+            if degraded:
+                msg += " (degraded — no fleet visibility)"
+            await conn.execute(
+                "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
+                (order_id, msg),
+            )
+            await self._log_event(conn, f"Order {order_id} assigned to {driver_id}")
         await conn.commit()
 
     # Terminal states — once an order reaches these, no other status can overwrite
@@ -458,11 +479,13 @@ class FleetState:
             await self._log_event(conn, f"Order {order_id} -> {status.value}: {note}")
         await conn.commit()
 
-    async def complete_order_delivery(self, driver_id: str, order_id: str) -> int:
+    async def complete_order_delivery(
+        self, driver_id: str, order_id: str
+    ) -> tuple[bool, int]:
         """Mark an order delivered and remove it from the driver's active queue.
 
-        Uses atomic conditional UPDATE to avoid overwriting CANCELLED status
-        (race with HITL cancel from a separate connection).
+        Returns (delivered, remaining_count). delivered=False when cancel won
+        the race (order already terminal).
         """
         conn = await self._get_conn()
         # Atomic: only set DELIVERED if not already terminal
@@ -471,7 +494,8 @@ class FleetState:
             (OrderStatus.DELIVERED.value, order_id,
              OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value),
         )
-        if cursor.rowcount > 0:
+        delivered = cursor.rowcount > 0
+        if delivered:
             await conn.execute(
                 "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
                 (order_id, "Delivered successfully!"),
@@ -490,7 +514,7 @@ class FleetState:
             "SELECT COUNT(*) as cnt FROM driver_orders WHERE driver_id=?", (driver_id,)
         ) as cursor:
             row = await cursor.fetchone()
-            return row["cnt"]
+            return delivered, row["cnt"]
 
     async def get_order_driver(self, order_id: str) -> str | None:
         conn = await self._get_conn()
@@ -694,11 +718,16 @@ class FleetState:
         }
 
     async def get_fleet_summary(self) -> str:
-        """Return a text summary of fleet state for LLM consumption."""
+        """Return a text summary of fleet state for LLM consumption.
+
+        Skips warmup-hidden drivers so the LLM only sees available drivers.
+        """
         conn = await self._get_conn()
         lines = ["=== Fleet Status ==="]
 
-        async with conn.execute("SELECT * FROM drivers") as cursor:
+        async with conn.execute(
+            "SELECT * FROM drivers WHERE warmup_hidden=0"
+        ) as cursor:
             async for row in cursor:
                 did = row["driver_id"]
                 # Get current orders for this driver

@@ -37,6 +37,7 @@ with workflow.unsafe.imports_passed_through():
         publish_agent_events_batch,
         register_assignment,
         set_driver_idle,
+        set_warmup_hidden,
         sync_driver_position,
     )
     from agent_fleet.agents import create_order_assignment_agent
@@ -345,6 +346,14 @@ class DriverRouteWorkflow:
 
             # All orders may have been cancelled during navigation
             if not self._batch_orders:
+                await workflow.execute_activity(
+                    set_driver_idle,
+                    driver_id,
+                    task_queue=DELIVERY_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=10),
+                    retry_policy=FAST_RETRY,
+                )
+                self._status = "idle"
                 continue
 
             order_ids_str = ", ".join(
@@ -784,6 +793,16 @@ class MeltdownDemoWorkflow:
             self._driver_orders[driver_id] = []
             self._driver_last_position[driver_id] = (WAREHOUSE.lat, WAREHOUSE.lng)
 
+        # Hide drivers D-E in FleetState during warmup so
+        # tool_get_fleet_status only shows A-C to the LLM
+        await workflow.execute_activity(
+            set_warmup_hidden,
+            args=[["driver-d", "driver-e"], True],
+            task_queue=DELIVERY_QUEUE,
+            start_to_close_timeout=timedelta(seconds=10),
+            retry_policy=FAST_RETRY,
+        )
+
         # Start 5 driver child workflows
         self._route_handles = {}
         for driver_id in DRIVER_IDS:
@@ -996,6 +1015,17 @@ class MeltdownDemoWorkflow:
         onum = order.order_id.split("-", 1)[-1]
         self._orders_generated += 1
 
+        # End warmup: unhide drivers D-E when warmup orders are done
+        if self._orders_generated == self._WARMUP_ORDERS + 1:
+            await workflow.execute_activity(
+                set_warmup_hidden,
+                args=[["driver-d", "driver-e"], False],
+                task_queue=DELIVERY_QUEUE,
+                start_to_close_timeout=timedelta(seconds=10),
+                retry_policy=FAST_RETRY,
+            )
+            workflow.logger.info("Warmup complete — drivers D-E now visible")
+
         # Track order in workflow state
         self._orders[order.order_id] = {
             "order_id": order.order_id,
@@ -1057,16 +1087,17 @@ class MeltdownDemoWorkflow:
 
         # Validate and reassign if chosen driver is invalid, full, or disconnected
         driver_id = assignment.driver_id
+        warming_up = self._orders_generated <= self._WARMUP_ORDERS
         needs_reassign = (
             driver_id not in self._route_handles
             or driver_id in self._disconnected_drivers
             or len(self._driver_orders.get(driver_id, [])) >= DRIVER_CAPACITY
+            or (warming_up and driver_id in ("driver-d", "driver-e"))
         )
 
         if needs_reassign:
             original = driver_id
             reassigned = False
-            warming_up = self._orders_generated <= self._WARMUP_ORDERS
             for fallback_id in DRIVER_IDS:
                 if fallback_id == original:
                     continue

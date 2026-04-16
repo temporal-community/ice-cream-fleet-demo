@@ -397,8 +397,8 @@ async def deliver_order(inp: DeliverInput) -> DeliverOutput:
     await asyncio.sleep(1.5)
 
     # Mark delivered (atomic: won't overwrite CANCELLED)
-    remaining_count = await fleet.complete_order_delivery(inp.driver_id, inp.order_id)
-    if remaining_count == 0:
+    delivered, remaining_count = await fleet.complete_order_delivery(inp.driver_id, inp.order_id)
+    if delivered and remaining_count == 0:
         await fleet.set_driver_status(inp.driver_id, DriverStatus.IDLE)
 
     # Final disconnect check — delivery committed but can't report
@@ -486,6 +486,15 @@ async def set_driver_idle(driver_id: str) -> None:
     """Set a driver to idle and clear path history in FleetState."""
     await fleet.set_driver_status(driver_id, DriverStatus.IDLE)
     await fleet.clear_driver_path_history(driver_id)
+
+
+# --- Warmup visibility activity ---
+
+
+@activity.defn
+async def set_warmup_hidden(driver_ids: list[str], hidden: bool = True) -> None:
+    """Hide or show drivers during warmup phase."""
+    await fleet.set_drivers_warmup_hidden(driver_ids, hidden)
 
 
 # --- Position sync activity ---
