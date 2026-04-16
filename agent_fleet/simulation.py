@@ -573,13 +573,6 @@ class FleetState:
 
     async def cancel_order(self, order_id: str) -> None:
         conn = await self._get_conn()
-        # Get the assigned driver before updating
-        async with conn.execute(
-            "SELECT assigned_driver_id FROM orders WHERE order_id=?", (order_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            assigned_driver_id = row["assigned_driver_id"] if row else None
-
         # Atomic: only cancel if not already terminal (idempotent on retry)
         cursor = await conn.execute(
             "UPDATE orders SET status=? WHERE order_id=? AND status NOT IN (?, ?)",
@@ -591,11 +584,11 @@ class FleetState:
                 "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
                 (order_id, "Cancelled by customer"),
             )
-            if assigned_driver_id:
-                await conn.execute(
-                    "DELETE FROM driver_orders WHERE driver_id=? AND order_id=?",
-                    (assigned_driver_id, order_id),
-                )
+            # Delete by order_id only — no stale-read race with concurrent assignment
+            await conn.execute(
+                "DELETE FROM driver_orders WHERE order_id=?",
+                (order_id,),
+            )
             await self._log_event(conn, f"Order {order_id} cancelled")
         await conn.commit()
 

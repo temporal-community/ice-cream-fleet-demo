@@ -464,8 +464,14 @@ class DriverRouteWorkflow:
                         lambda: self._update_decision is not None
                     )
 
-                # Process decision if one was made
-                if self._update_decision is not None:
+                # Process decision if one was made FOR THIS ORDER
+                if (
+                    self._update_decision is not None
+                    and (
+                        self._update_pending_order is None
+                        or self._update_pending_order == order.order_id
+                    )
+                ):
                     decision = self._update_decision
                     self._update_pending_order = None
                     self._update_decision = None
