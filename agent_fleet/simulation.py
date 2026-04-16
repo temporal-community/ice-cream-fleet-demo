@@ -399,8 +399,8 @@ class FleetState:
     ) -> None:
         """Register a new dynamically-generated order."""
         conn = await self._get_conn()
-        await conn.execute(
-            "INSERT INTO orders "
+        cursor = await conn.execute(
+            "INSERT OR IGNORE INTO orders "
             "(order_id, hotel, label, priority, servings, delivery_lat, delivery_lng, "
             "deadline_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -414,7 +414,8 @@ class FleetState:
                 deadline_minutes,
             ),
         )
-        await self._log_event(conn, f"New order {order_id}: {label}")
+        if cursor.rowcount > 0:
+            await self._log_event(conn, f"New order {order_id}: {label}")
         await conn.commit()
 
     async def assign_order_to_driver(
@@ -612,9 +613,11 @@ class FleetState:
         """Return full state as JSON-serializable dict (for frontend)."""
         conn = await self._get_conn()
 
-        # Drivers
+        # Drivers (skip warmup-hidden so frontend doesn't render D/E early)
         drivers: dict[str, Any] = {}
-        async with conn.execute("SELECT * FROM drivers") as cursor:
+        async with conn.execute(
+            "SELECT * FROM drivers WHERE warmup_hidden=0"
+        ) as cursor:
             async for row in cursor:
                 did = row["driver_id"]
                 # Get current orders

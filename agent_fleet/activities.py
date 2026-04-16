@@ -472,9 +472,9 @@ async def execute_customer_change(
         inp.change_type == "address_change" and inp.new_lat is not None and inp.new_lng is not None
     ):
         await fleet.update_order_delivery(inp.order_id, inp.new_lat, inp.new_lng, inp.new_hotel)
-        await fleet.update_order_status(
-            inp.order_id, OrderStatus.REROUTED, f"Rerouted to {inp.new_hotel or 'new address'}"
-        )
+        # Status update only — note is empty because update_order_delivery
+        # already wrote the reroute log entry
+        await fleet.update_order_status(inp.order_id, OrderStatus.REROUTED)
         dest = inp.new_hotel or f"({inp.new_lat:.4f}, {inp.new_lng:.4f})"
         activity.logger.info(f"Order {inp.order_id} rerouted to {dest}")
 

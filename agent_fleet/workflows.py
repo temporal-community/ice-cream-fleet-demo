@@ -464,13 +464,10 @@ class DriverRouteWorkflow:
                         lambda: self._update_decision is not None
                     )
 
-                # Process decision if one was made FOR THIS ORDER
+                # Process decision if one was made FOR THIS ORDER only
                 if (
                     self._update_decision is not None
-                    and (
-                        self._update_pending_order is None
-                        or self._update_pending_order == order.order_id
-                    )
+                    and self._update_pending_order == order.order_id
                 ):
                     decision = self._update_decision
                     self._update_pending_order = None
@@ -567,10 +564,10 @@ class DriverRouteWorkflow:
 
                 self._active_order_id = None
                 self._cancel_pending = False
-                self._update_decision = None
-                # Only clear pending order if it was for THIS order —
+                # Only clear HITL state if it was for THIS order —
                 # a pending update for a later batched order must survive
                 if self._update_pending_order == order.order_id:
+                    self._update_decision = None
                     self._update_pending_order = None
 
                 # Remove from current_orders tracking
@@ -1312,8 +1309,17 @@ class MeltdownDemoWorkflow:
                 retry_policy=FAST_RETRY,
             )
 
-            # Signal child with the approved decision
+            # Signal child with the approved decision.
+            # Send update_pending first for late-assigned orders (driver_id
+            # was None at submission, resolved after approval wait).
             if driver_id and driver_id in self._route_handles:
+                await self._route_handles[driver_id].signal(
+                    DriverRouteWorkflow.update_pending,
+                    OrderUpdateInput(
+                        order_id=change.order_id,
+                        change_type=change.change_type,
+                    ),
+                )
                 # For pending/batched orders: also send cancel_order or
                 # update_order so the order is immediately removed/updated
                 # without a wasted navigation trip
