@@ -1050,8 +1050,11 @@ class MeltdownDemoWorkflow:
         if needs_reassign:
             original = driver_id
             reassigned = False
+            warming_up = self._orders_generated <= self._WARMUP_ORDERS
             for fallback_id in DRIVER_IDS:
                 if fallback_id == original:
+                    continue
+                if warming_up and fallback_id in ("driver-d", "driver-e"):
                     continue
                 if fallback_id in self._disconnected_drivers:
                     continue

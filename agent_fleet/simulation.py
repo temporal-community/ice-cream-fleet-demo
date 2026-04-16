@@ -521,9 +521,8 @@ class FleetState:
         """
         conn = await self._get_conn()
         if new_hotel:
-            # Update hotel, coordinates, and append reroute to label
             # Don't modify terminal orders
-            await conn.execute(
+            cursor = await conn.execute(
                 "UPDATE orders SET delivery_lat=?, delivery_lng=?, hotel=?, "
                 "label=label || ' → ' || ? "
                 "WHERE order_id=? AND status NOT IN (?, ?)",
@@ -532,17 +531,18 @@ class FleetState:
             )
             note = f"Rerouted to {new_hotel}"
         else:
-            await conn.execute(
+            cursor = await conn.execute(
                 "UPDATE orders SET delivery_lat=?, delivery_lng=? "
                 "WHERE order_id=? AND status NOT IN (?, ?)",
                 (new_lat, new_lng, order_id,
                  OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value),
             )
             note = f"Delivery address updated to ({new_lat:.4f}, {new_lng:.4f})"
-        await conn.execute(
-            "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
-            (order_id, note),
-        )
+        if cursor.rowcount > 0:
+            await conn.execute(
+                "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
+                (order_id, note),
+            )
         await conn.commit()
 
     async def cancel_order(self, order_id: str) -> None:
@@ -554,10 +554,11 @@ class FleetState:
             row = await cursor.fetchone()
             assigned_driver_id = row["assigned_driver_id"] if row else None
 
-        # Atomic: only cancel if not already delivered
+        # Atomic: only cancel if not already terminal (idempotent on retry)
         cursor = await conn.execute(
-            "UPDATE orders SET status=? WHERE order_id=? AND status != ?",
-            (OrderStatus.CANCELLED.value, order_id, OrderStatus.DELIVERED.value),
+            "UPDATE orders SET status=? WHERE order_id=? AND status NOT IN (?, ?)",
+            (OrderStatus.CANCELLED.value, order_id,
+             OrderStatus.DELIVERED.value, OrderStatus.CANCELLED.value),
         )
         if cursor.rowcount > 0:
             await conn.execute(
