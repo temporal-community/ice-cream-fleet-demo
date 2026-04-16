@@ -432,21 +432,30 @@ class FleetState:
         conn = await self._get_conn()
         # Terminal states can only be set explicitly, never overwritten
         if status.value not in self._TERMINAL_STATUSES:
-            await conn.execute(
+            cursor = await conn.execute(
                 "UPDATE orders SET status=? WHERE order_id=? AND status NOT IN (?, ?)",
                 (status.value, order_id, OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value),
             )
+            # Only log if status actually changed (avoids phantom entries
+            # for cancelled/delivered orders whose activities are still running)
+            if cursor.rowcount > 0:
+                if note:
+                    await conn.execute(
+                        "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
+                        (order_id, note),
+                    )
+                await self._log_event(conn, f"Order {order_id} -> {status.value}: {note}")
         else:
             await conn.execute(
                 "UPDATE orders SET status=? WHERE order_id=?",
                 (status.value, order_id),
             )
-        if note:
-            await conn.execute(
-                "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
-                (order_id, note),
-            )
-        await self._log_event(conn, f"Order {order_id} -> {status.value}: {note}")
+            if note:
+                await conn.execute(
+                    "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
+                    (order_id, note),
+                )
+            await self._log_event(conn, f"Order {order_id} -> {status.value}: {note}")
         await conn.commit()
 
     async def complete_order_delivery(self, driver_id: str, order_id: str) -> int:
@@ -456,23 +465,24 @@ class FleetState:
         (race with HITL cancel from a separate connection).
         """
         conn = await self._get_conn()
-        # Atomic: only set DELIVERED if not already CANCELLED
+        # Atomic: only set DELIVERED if not already terminal
         cursor = await conn.execute(
-            "UPDATE orders SET status=? WHERE order_id=? AND status != ?",
-            (OrderStatus.DELIVERED.value, order_id, OrderStatus.CANCELLED.value),
+            "UPDATE orders SET status=? WHERE order_id=? AND status NOT IN (?, ?)",
+            (OrderStatus.DELIVERED.value, order_id,
+             OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value),
         )
         if cursor.rowcount > 0:
             await conn.execute(
                 "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
                 (order_id, "Delivered successfully!"),
             )
+            await self._log_event(
+                conn,
+                f"Order {order_id} delivered",
+            )
         await conn.execute(
             "DELETE FROM driver_orders WHERE driver_id=? AND order_id=?",
             (driver_id, order_id),
-        )
-        await self._log_event(
-            conn,
-            f"Order {order_id} -> {OrderStatus.DELIVERED.value}: Delivered successfully!",
         )
         await conn.commit()
         # Return remaining order count for this driver
@@ -505,20 +515,28 @@ class FleetState:
     async def update_order_delivery(
         self, order_id: str, new_lat: float, new_lng: float, new_hotel: str | None = None
     ) -> None:
-        """Update delivery coordinates (and optionally hotel) for an order (customer change)."""
+        """Update delivery coordinates (and optionally hotel) for an order (customer change).
+
+        Skips if order is already in a terminal state.
+        """
         conn = await self._get_conn()
         if new_hotel:
             # Update hotel, coordinates, and append reroute to label
+            # Don't modify terminal orders
             await conn.execute(
                 "UPDATE orders SET delivery_lat=?, delivery_lng=?, hotel=?, "
-                "label=label || ' → ' || ? WHERE order_id=?",
-                (new_lat, new_lng, new_hotel, new_hotel, order_id),
+                "label=label || ' → ' || ? "
+                "WHERE order_id=? AND status NOT IN (?, ?)",
+                (new_lat, new_lng, new_hotel, new_hotel, order_id,
+                 OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value),
             )
             note = f"Rerouted to {new_hotel}"
         else:
             await conn.execute(
-                "UPDATE orders SET delivery_lat=?, delivery_lng=? WHERE order_id=?",
-                (new_lat, new_lng, order_id),
+                "UPDATE orders SET delivery_lat=?, delivery_lng=? "
+                "WHERE order_id=? AND status NOT IN (?, ?)",
+                (new_lat, new_lng, order_id,
+                 OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value),
             )
             note = f"Delivery address updated to ({new_lat:.4f}, {new_lng:.4f})"
         await conn.execute(
@@ -536,20 +554,22 @@ class FleetState:
             row = await cursor.fetchone()
             assigned_driver_id = row["assigned_driver_id"] if row else None
 
-        await conn.execute(
-            "UPDATE orders SET status=? WHERE order_id=?",
-            (OrderStatus.CANCELLED.value, order_id),
+        # Atomic: only cancel if not already delivered
+        cursor = await conn.execute(
+            "UPDATE orders SET status=? WHERE order_id=? AND status != ?",
+            (OrderStatus.CANCELLED.value, order_id, OrderStatus.DELIVERED.value),
         )
-        await conn.execute(
-            "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
-            (order_id, "Cancelled by customer"),
-        )
-        if assigned_driver_id:
+        if cursor.rowcount > 0:
             await conn.execute(
-                "DELETE FROM driver_orders WHERE driver_id=? AND order_id=?",
-                (assigned_driver_id, order_id),
+                "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
+                (order_id, "Cancelled by customer"),
             )
-        await self._log_event(conn, f"Order {order_id} cancelled")
+            if assigned_driver_id:
+                await conn.execute(
+                    "DELETE FROM driver_orders WHERE driver_id=? AND order_id=?",
+                    (assigned_driver_id, order_id),
+                )
+            await self._log_event(conn, f"Order {order_id} cancelled")
         await conn.commit()
 
     # --- Agent events (for UI panel) ---
