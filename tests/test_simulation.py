@@ -64,8 +64,8 @@ async def test_assign_order_to_driver():
     assert "order-1" in driver.current_orders
 
 
-async def test_assign_order_idempotent():
-    """Calling assign_order_to_driver twice returns False on second call."""
+async def test_assign_order_idempotent_on_retry():
+    """Calling assign_order_to_driver twice succeeds both times (Temporal retry safe)."""
     from agent_fleet.models import Coords
 
     await fleet.register_order(
@@ -81,9 +81,10 @@ async def test_assign_order_idempotent():
     result = await fleet.assign_order_to_driver("driver-a", "order-1")
     assert result is True
 
-    # Second assignment is a no-op (already ASSIGNED)
+    # Second assignment also succeeds (idempotent retry —
+    # ASSIGNED is not excluded so the workflow proceeds correctly)
     result = await fleet.assign_order_to_driver("driver-a", "order-1")
-    assert result is False
+    assert result is True
 
 
 async def test_assign_order_skips_cancelled():

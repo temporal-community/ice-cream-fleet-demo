@@ -427,10 +427,9 @@ class FleetState:
         conn = await self._get_conn()
         cursor = await conn.execute(
             "UPDATE orders SET assigned_driver_id=?, status=?, degraded=? "
-            "WHERE order_id=? AND status NOT IN (?, ?, ?)",
+            "WHERE order_id=? AND status NOT IN (?, ?)",
             (driver_id, OrderStatus.ASSIGNED.value, 1 if degraded else 0,
-             order_id, OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value,
-             OrderStatus.ASSIGNED.value),
+             order_id, OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value),
         )
         if cursor.rowcount > 0:
             await conn.execute(

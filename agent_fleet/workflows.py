@@ -568,7 +568,10 @@ class DriverRouteWorkflow:
                 self._active_order_id = None
                 self._cancel_pending = False
                 self._update_decision = None
-                self._update_pending_order = None
+                # Only clear pending order if it was for THIS order —
+                # a pending update for a later batched order must survive
+                if self._update_pending_order == order.order_id:
+                    self._update_pending_order = None
 
                 # Remove from current_orders tracking
                 try:
@@ -1289,6 +1292,9 @@ class MeltdownDemoWorkflow:
         # Wait for human approval — workflow pauses here, everything else keeps running
         await workflow.wait_condition(lambda: len(self._pending_approvals) > 0)
         approved = self._pending_approvals.pop(0)
+
+        # Re-resolve driver_id — order may have been assigned during the wait
+        driver_id = self._find_driver_for_order(change.order_id)
 
         if approved:
             await workflow.execute_activity(
