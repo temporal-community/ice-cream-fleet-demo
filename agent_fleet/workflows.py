@@ -115,11 +115,14 @@ class DriverRouteWorkflow:
         self._path_history: list[dict] = []
         self._is_recovering: bool = False
         self._position_sync_needed: bool = False
-        # Mid-delivery reroute/cancel tracking
+        # HITL: update pending + decision tracking
         self._active_order_id: str | None = None
-        self._reroute_pending: dict | None = None  # {"lat": float, "lng": float}
-        self._cancel_pending: bool = False
-        self._batch_orders: list[DriverRouteOrder] = []  # orders collected for current batch
+        self._update_pending: bool = False  # change submitted, awaiting decision
+        self._update_decision: str | None = None  # "cancel", "reroute", "release"
+        self._update_new_lat: float | None = None
+        self._update_new_lng: float | None = None
+        self._cancel_pending: bool = False  # for pending/batched order cancels
+        self._batch_orders: list[DriverRouteOrder] = []
 
     # --- Signals ---
 
@@ -147,37 +150,39 @@ class DriverRouteWorkflow:
         workflow.logger.info(f"Driver {inp.driver_id} reconnected — resuming")
 
     @workflow.signal
-    async def update_order(self, inp: OrderUpdateInput) -> None:
-        """Update delivery coordinates — works for pending, batched, and active orders."""
-        # Check pending orders first
-        for order in self._pending_orders:
-            if order.order_id == inp.order_id:
-                if inp.new_lat is not None and inp.new_lng is not None:
-                    order.delivery_lat = inp.new_lat
-                    order.delivery_lng = inp.new_lng
-                workflow.logger.info(f"Order {inp.order_id} updated (pending) — new destination")
-                return
-        # Check batched orders (collected but not yet being delivered)
-        for order in self._batch_orders:
-            if order.order_id == inp.order_id:
-                if inp.new_lat is not None and inp.new_lng is not None:
-                    order.delivery_lat = inp.new_lat
-                    order.delivery_lng = inp.new_lng
-                workflow.logger.info(f"Order {inp.order_id} updated (batched) — new destination")
-                return
-        # If order is currently being delivered, flag for reroute
+    async def update_pending(self, inp: OrderUpdateInput) -> None:
+        """Signal that a customer change is submitted — driver should hold before delivery."""
         if self._active_order_id == inp.order_id:
-            if inp.new_lat is not None and inp.new_lng is not None:
-                self._reroute_pending = {"lat": inp.new_lat, "lng": inp.new_lng}
-                workflow.logger.info(
-                    f"Order {inp.order_id} reroute queued — driver will reroute after current leg"
-                )
-            return
-        workflow.logger.info(f"Order {inp.order_id} not found — may already be delivered")
+            self._update_pending = True
+            workflow.logger.info(
+                f"Order {inp.order_id} — update pending, driver will hold before delivery"
+            )
+        else:
+            # Order not yet active — update pending/batched orders directly
+            for order in self._pending_orders + self._batch_orders:
+                if order.order_id == inp.order_id:
+                    self._update_pending = True
+                    workflow.logger.info(
+                        f"Order {inp.order_id} — update pending (queued)"
+                    )
+                    return
+            workflow.logger.info(f"Order {inp.order_id} not found for hold")
+
+    @workflow.signal
+    async def resolve_update(self, inp: OrderUpdateInput) -> None:
+        """Signal the decision after HITL approval — cancel, reroute, or release."""
+        self._update_decision = inp.change_type  # "cancel", "address_change", "release"
+        if inp.new_lat is not None:
+            self._update_new_lat = inp.new_lat
+        if inp.new_lng is not None:
+            self._update_new_lng = inp.new_lng
+        workflow.logger.info(
+            f"Order {inp.order_id} — update resolved: {inp.change_type}"
+        )
 
     @workflow.signal
     async def cancel_order(self, inp: OrderUpdateInput) -> None:
-        """Cancel an order — works for pending, batched, and active orders."""
+        """Cancel an order — works for pending and batched orders."""
         # Check pending orders
         before = len(self._pending_orders)
         self._pending_orders = [o for o in self._pending_orders if o.order_id != inp.order_id]
@@ -188,7 +193,7 @@ class DriverRouteWorkflow:
             except ValueError:
                 pass
             return
-        # Check batched orders (collected but not yet being delivered)
+        # Check batched orders
         before = len(self._batch_orders)
         self._batch_orders = [o for o in self._batch_orders if o.order_id != inp.order_id]
         if len(self._batch_orders) < before:
@@ -198,12 +203,21 @@ class DriverRouteWorkflow:
             except ValueError:
                 pass
             return
-        # If order is currently being delivered, flag for cancel
-        if self._active_order_id == inp.order_id:
-            self._cancel_pending = True
-            workflow.logger.info(f"Order {inp.order_id} cancel queued — will skip delivery")
-            return
-        workflow.logger.info(f"Order {inp.order_id} not found — may already be delivered")
+        # Active order cancel is now handled by resolve_update("cancel")
+        workflow.logger.info(f"Order {inp.order_id} not in pending/batch — handled by HITL flow")
+
+    @workflow.signal
+    async def update_order(self, inp: OrderUpdateInput) -> None:
+        """Update delivery coordinates for pending/batched orders."""
+        for order in self._pending_orders + self._batch_orders:
+            if order.order_id == inp.order_id:
+                if inp.new_lat is not None and inp.new_lng is not None:
+                    order.delivery_lat = inp.new_lat
+                    order.delivery_lng = inp.new_lng
+                workflow.logger.info(f"Order {inp.order_id} updated — new destination")
+                return
+        # Active order reroute is now handled by resolve_update("address_change")
+        workflow.logger.info(f"Order {inp.order_id} not in pending/batch — handled by HITL flow")
 
     # --- Queries ---
 
@@ -410,70 +424,110 @@ class DriverRouteWorkflow:
                         pass
                     continue
 
-                # Navigate to hotel — with reroute loop
-                while True:
-                    if self._cancel_pending:
+                # Navigate to hotel
+                self._status = "en_route_delivery"
+                delivery_waypoints = await workflow.execute_activity(
+                    get_route_polyline,
+                    args=[
+                        self._current_lat,
+                        self._current_lng,
+                        order.delivery_lat,
+                        order.delivery_lng,
+                    ],
+                    task_queue=DELIVERY_QUEUE,
+                    summary=f"[#{onum}] Calculating route to {order.hotel}",
+                    schedule_to_close_timeout=timedelta(minutes=5),
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=FAST_RETRY,
+                )
+
+                nav_result = await self._execute_navigate(
+                    driver_id,
+                    NavigateInput(
+                        driver_id=driver_id,
+                        order_id=order.order_id,
+                        target_lat=order.delivery_lat,
+                        target_lng=order.delivery_lng,
+                        leg="delivery",
+                        steps=30,
+                        waypoints=delivery_waypoints,
+                        start_lat=self._current_lat,
+                        start_lng=self._current_lng,
+                    ),
+                    summary=f"[#{onum}] Delivering to {order.hotel}",
+                )
+                self._current_lat = nav_result.final_lat
+                self._current_lng = nav_result.final_lng
+                self._path_history.append(
+                    {"lat": nav_result.final_lat, "lng": nav_result.final_lng}
+                )
+
+                # --- HITL hold: if a customer change is pending, wait for decision ---
+                if self._update_pending:
+                    self._status = "awaiting_update"
+                    workflow.logger.info(
+                        f"[{order.order_id}] Holding at {order.hotel} — awaiting HITL decision"
+                    )
+                    await workflow.wait_condition(
+                        lambda: self._update_decision is not None
+                    )
+
+                    decision = self._update_decision
+                    self._update_pending = False
+                    self._update_decision = None
+
+                    if decision == "cancel":
+                        workflow.logger.info(f"[{order.order_id}] HITL cancel approved")
+                        self._cancel_pending = True
+                    elif decision == "address_change":
+                        # Reroute: update destination and re-navigate
+                        if self._update_new_lat and self._update_new_lng:
+                            order.delivery_lat = self._update_new_lat
+                            order.delivery_lng = self._update_new_lng
+                            self._update_new_lat = None
+                            self._update_new_lng = None
+                            workflow.logger.info(
+                                f"[{order.order_id}] HITL reroute approved — "
+                                f"navigating to new destination"
+                            )
+                            # Navigate to new destination
+                            reroute_waypoints = await workflow.execute_activity(
+                                get_route_polyline,
+                                args=[
+                                    self._current_lat,
+                                    self._current_lng,
+                                    order.delivery_lat,
+                                    order.delivery_lng,
+                                ],
+                                task_queue=DELIVERY_QUEUE,
+                                summary=f"[#{onum}] Rerouting to new destination",
+                                schedule_to_close_timeout=timedelta(minutes=5),
+                                start_to_close_timeout=timedelta(seconds=30),
+                                retry_policy=FAST_RETRY,
+                            )
+                            nav_result = await self._execute_navigate(
+                                driver_id,
+                                NavigateInput(
+                                    driver_id=driver_id,
+                                    order_id=order.order_id,
+                                    target_lat=order.delivery_lat,
+                                    target_lng=order.delivery_lng,
+                                    leg="delivery",
+                                    steps=30,
+                                    waypoints=reroute_waypoints,
+                                    start_lat=self._current_lat,
+                                    start_lng=self._current_lng,
+                                ),
+                                summary=f"[#{onum}] Rerouting to new destination",
+                            )
+                            self._current_lat = nav_result.final_lat
+                            self._current_lng = nav_result.final_lng
+                    else:
                         workflow.logger.info(
-                            f"Order {order.order_id} cancelled — skipping delivery"
+                            f"[{order.order_id}] HITL change rejected — delivering normally"
                         )
-                        break
-
-                    self._status = "en_route_delivery"
-                    delivery_waypoints = await workflow.execute_activity(
-                        get_route_polyline,
-                        args=[
-                            self._current_lat,
-                            self._current_lng,
-                            order.delivery_lat,
-                            order.delivery_lng,
-                        ],
-                        task_queue=DELIVERY_QUEUE,
-                        summary=f"[#{onum}] Calculating route to {order.hotel}",
-                        schedule_to_close_timeout=timedelta(minutes=5),
-                        start_to_close_timeout=timedelta(seconds=30),
-                        retry_policy=FAST_RETRY,
-                    )
-
-                    nav_result = await self._execute_navigate(
-                        driver_id,
-                        NavigateInput(
-                            driver_id=driver_id,
-                            order_id=order.order_id,
-                            target_lat=order.delivery_lat,
-                            target_lng=order.delivery_lng,
-                            leg="delivery",
-                            steps=30,
-                            waypoints=delivery_waypoints,
-                            start_lat=self._current_lat,
-                            start_lng=self._current_lng,
-                        ),
-                        summary=f"[#{onum}] Delivering to {order.hotel}",
-                    )
-                    self._current_lat = nav_result.final_lat
-                    self._current_lng = nav_result.final_lng
-                    self._path_history.append(
-                        {"lat": nav_result.final_lat, "lng": nav_result.final_lng}
-                    )
-
-                    # Check if a reroute signal arrived during navigation
-                    if self._reroute_pending:
-                        new_dest = self._reroute_pending
-                        self._reroute_pending = None
-                        order.delivery_lat = new_dest["lat"]
-                        order.delivery_lng = new_dest["lng"]
-                        workflow.logger.info(
-                            f"Order {order.order_id} rerouted — navigating to new destination"
-                        )
-                        continue  # Re-navigate to new destination
-
-                    break  # No reroute — proceed to deliver
 
                 # Deliver (skip if cancelled)
-                workflow.logger.info(
-                    f"[{order.order_id}] post-nav: "
-                    f"cancel={self._cancel_pending}, "
-                    f"disconn={self._is_disconnected}"
-                )
                 if not self._cancel_pending:
                     self._status = "delivering"
                     await workflow.execute_activity(
@@ -490,8 +544,8 @@ class DriverRouteWorkflow:
                     )
                     delivered.append(order.order_id)
                 else:
-                    workflow.logger.warning(
-                        f"[{order.order_id}] SKIPPED deliver — cancel_pending was True"
+                    workflow.logger.info(
+                        f"[{order.order_id}] Delivery skipped — cancelled"
                     )
 
                 self._active_order_id = None
@@ -1210,6 +1264,18 @@ class MeltdownDemoWorkflow:
             start_to_close_timeout=timedelta(seconds=10),
         )
 
+        # Signal child to hold delivery while we wait for human approval
+        driver_id = self._find_driver_for_order(change.order_id)
+        if driver_id and driver_id in self._route_handles:
+            await self._route_handles[driver_id].signal(
+                DriverRouteWorkflow.update_pending,
+                OrderUpdateInput(
+                    order_id=change.order_id,
+                    change_type=change.change_type,
+                ),
+            )
+
+        # Wait for human approval — workflow pauses here, everything else keeps running
         await workflow.wait_condition(lambda: len(self._pending_approvals) > 0)
         approved = self._pending_approvals.pop(0)
 
@@ -1229,33 +1295,22 @@ class MeltdownDemoWorkflow:
                 retry_policy=FAST_RETRY,
             )
 
-            # Signal child workflow with updated coordinates
-            driver_id = self._find_driver_for_order(change.order_id)
+            # Signal child with the approved decision
             if driver_id and driver_id in self._route_handles:
+                await self._route_handles[driver_id].signal(
+                    DriverRouteWorkflow.resolve_update,
+                    OrderUpdateInput(
+                        order_id=change.order_id,
+                        change_type=change.change_type,
+                        new_lat=change.new_lat,
+                        new_lng=change.new_lng,
+                    ),
+                )
                 if change.change_type == "cancel":
-                    await self._route_handles[driver_id].signal(
-                        DriverRouteWorkflow.cancel_order,
-                        OrderUpdateInput(
-                            order_id=change.order_id,
-                            change_type=change.change_type,
-                        ),
-                    )
-                    # Free the capacity slot so the driver can accept new orders
                     try:
                         self._driver_orders[driver_id].remove(change.order_id)
                     except (KeyError, ValueError):
                         pass
-                else:
-                    await self._route_handles[driver_id].signal(
-                        DriverRouteWorkflow.update_order,
-                        OrderUpdateInput(
-                            order_id=change.order_id,
-                            change_type=change.change_type,
-                            new_lat=change.new_lat,
-                            new_lng=change.new_lng,
-                        ),
-                    )
-
             await workflow.execute_local_activity(
                 publish_agent_event,
                 PublishAgentEventInput(
@@ -1269,6 +1324,15 @@ class MeltdownDemoWorkflow:
                 start_to_close_timeout=timedelta(seconds=10),
             )
         else:
+            # Rejected — signal child to release (deliver normally)
+            if driver_id and driver_id in self._route_handles:
+                await self._route_handles[driver_id].signal(
+                    DriverRouteWorkflow.resolve_update,
+                    OrderUpdateInput(
+                        order_id=change.order_id,
+                        change_type="release",
+                    ),
+                )
             await workflow.execute_local_activity(
                 publish_agent_event,
                 PublishAgentEventInput(
