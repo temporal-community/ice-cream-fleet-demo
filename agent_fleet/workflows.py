@@ -725,7 +725,7 @@ class MeltdownDemoWorkflow:
     def _build_driver_snapshots(self) -> list[DriverSnapshot]:
         """Build driver snapshots from workflow state for activity inputs."""
         snapshots = []
-        warming_up = self._orders_generated < self._WARMUP_ORDERS
+        warming_up = self._orders_generated <= self._WARMUP_ORDERS
         for driver_id in DRIVER_IDS:
             # During warmup, hide drivers D-E so agents only assign to A-C
             if warming_up and driver_id in ("driver-d", "driver-e"):
