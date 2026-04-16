@@ -28,9 +28,12 @@ and FastAPI server (`python -m agent_fleet.server`). No manual Temporal setup ne
   reconnected. Driver completes delivery, stays at hotel, can't report back until reconnected.
   On reconnect, `sync_driver_position` activity reads actual position from FleetState — no
   teleporting. Completed deliveries are not repeated; batch continues from next pending order.
-  Supports mid-delivery reroute: `update_order` signal sets `_reroute_pending` flag — driver
-  finishes current navigation leg then re-navigates to new destination. For queued (not yet active)
-  orders, coordinates update in-place silently. Cancel via `cancel_order`.
+  HITL hold pattern: when a customer change is submitted, parent signals child with
+  `update_pending` — driver navigates to hotel but holds before delivering (`awaiting_update`
+  status, `wait_condition`). On approval, parent signals `resolve_update` with the decision:
+  cancel → skip delivery, address_change → reroute to new destination, release → deliver
+  normally. Two `wait_condition` patterns: parent waits for human, child waits for parent.
+  For pending/batched orders, changes apply directly without hold.
   `OrderGenerationWorkflow` is a child workflow that generates orders on a randomized timer and
   signals the parent. Parent handles assignment.
 - **Server reads FleetState** (`server.py`): WebSocket data comes from `fleet.snapshot()` (SQLite).
