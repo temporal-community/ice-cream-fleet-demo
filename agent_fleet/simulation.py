@@ -261,6 +261,14 @@ class FleetState:
         await self._log_event(conn, f"Driver {driver_id} -> {status.value}")
         await conn.commit()
 
+    async def clear_driver_path_history(self, driver_id: str) -> None:
+        """Clear path history for a driver — called at start of each delivery leg."""
+        conn = await self._get_conn()
+        await conn.execute(
+            "DELETE FROM driver_path_history WHERE driver_id=?", (driver_id,)
+        )
+        await conn.commit()
+
     async def get_driver_position(self, driver_id: str) -> tuple[float, float]:
         conn = await self._get_conn()
         async with conn.execute(

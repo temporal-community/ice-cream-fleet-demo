@@ -1025,27 +1025,49 @@ class MeltdownDemoWorkflow:
                 start_to_close_timeout=timedelta(seconds=10),
             )
 
-        # Capacity check — reassign if chosen driver is full or disconnected
+        # Validate and reassign if chosen driver is invalid, full, or disconnected
         driver_id = assignment.driver_id
-        order_count = len(self._driver_orders.get(driver_id, []))
-        driver_disconnected = driver_id in self._disconnected_drivers
+        needs_reassign = (
+            driver_id not in self._route_handles
+            or driver_id in self._disconnected_drivers
+            or len(self._driver_orders.get(driver_id, [])) >= DRIVER_CAPACITY
+        )
 
-        if order_count >= DRIVER_CAPACITY or driver_disconnected:
+        if needs_reassign:
             original = driver_id
-            reason = "at capacity" if order_count >= DRIVER_CAPACITY else "disconnected"
-            # Find next available driver
+            driver_id = ""  # Reset — must find a valid fallback
             for fallback_id in DRIVER_IDS:
                 if fallback_id == original:
                     continue
                 if fallback_id in self._disconnected_drivers:
                     continue
+                if fallback_id not in self._route_handles:
+                    continue
                 if len(self._driver_orders.get(fallback_id, [])) < DRIVER_CAPACITY:
                     driver_id = fallback_id
+                    reason = "invalid" if original not in self._route_handles else (
+                        "disconnected" if original in self._disconnected_drivers else "at capacity"
+                    )
                     workflow.logger.warning(
                         f"Reassigning {order.order_id}: {original} is {reason} "
                         f"→ {driver_id}"
                     )
                     break
+
+            if not driver_id:
+                # No driver available — force-assign to first non-disconnected
+                # driver even if at capacity (better than dropping the order)
+                for fallback_id in DRIVER_IDS:
+                    if (
+                        fallback_id not in self._disconnected_drivers
+                        and fallback_id in self._route_handles
+                    ):
+                        driver_id = fallback_id
+                        workflow.logger.warning(
+                            f"No capacity — force-assigning "
+                            f"{order.order_id} to {driver_id}"
+                        )
+                        break
 
         # Register final assignment AFTER capacity check so SQLite gets the correct driver
         await workflow.execute_activity(

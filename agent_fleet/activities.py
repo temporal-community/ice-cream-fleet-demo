@@ -275,6 +275,10 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
             f"En route to {leg}",
         )
 
+    # Clear path history at start of delivery leg so trail shows only this leg
+    if inp.leg == "delivery":
+        await fleet.clear_driver_path_history(inp.driver_id)
+
     # Read actual position from FleetState — handles retry after disconnect where
     # the driver may have moved (completed navigation) but the workflow didn't get
     # the result. On first attempt this matches the workflow's position. On retry
