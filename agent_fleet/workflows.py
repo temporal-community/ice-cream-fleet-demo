@@ -76,7 +76,7 @@ NAV_RETRY = RetryPolicy(
     maximum_interval=timedelta(seconds=30),
 )
 
-MAX_ORDERS = 30
+MAX_ORDERS = 50
 ORDER_INTERVAL_SECONDS = 10
 
 PARENT_WORKFLOW_ID = "meltdown-demo"
@@ -891,7 +891,10 @@ class MeltdownDemoWorkflow:
         state = updated_session.state or {}
         assignment_dict = state.get("assignment")
         if not assignment_dict:
-            raise RuntimeError("ADK assignment resolver did not submit an assignment")
+            workflow.logger.warning(
+                "ADK did not call tool_submit_assignment — LLM instruction failure"
+            )
+            assignment_dict = {"driver_id": "", "reasoning_summary": ""}
 
         driver_id = assignment_dict["driver_id"]
         reasoning = assignment_dict.get("reasoning_summary", "ADK assignment")
@@ -1019,7 +1022,19 @@ class MeltdownDemoWorkflow:
                 retry_policy=FAST_RETRY,
             )
         else:
-            assignment = await self._run_adk_assignment(assignment_input)
+            # Workflow-level retry: if the LLM doesn't call tool_submit_assignment,
+            # re-run the ADK pipeline. Individual LLM/tool activities inside are
+            # already retried by Temporal — this handles the case where the LLM
+            # succeeds but doesn't follow instructions.
+            max_adk_attempts = 3
+            for attempt in range(1, max_adk_attempts + 1):
+                assignment = await self._run_adk_assignment(assignment_input)
+                if assignment.driver_id:
+                    break
+                workflow.logger.warning(
+                    f"ADK attempt {attempt}/{max_adk_attempts} did not produce "
+                    f"assignment for {order.order_id} — retrying"
+                )
         # Determine if this is a degraded assignment (Fleet Agent offline)
         fleet_offline = "fleet_agent" in self._disconnected_agents
 
