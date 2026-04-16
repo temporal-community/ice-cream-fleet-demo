@@ -36,6 +36,7 @@ with workflow.unsafe.imports_passed_through():
         publish_agent_event,
         publish_agent_events_batch,
         register_assignment,
+        set_driver_idle,
         sync_driver_position,
     )
     from agent_fleet.agents import create_order_assignment_agent
@@ -341,6 +342,11 @@ class DriverRouteWorkflow:
             # Scoop up any orders that arrived while driving to Ziggy's
             while self._pending_orders:
                 self._batch_orders.append(self._pending_orders.pop(0))
+
+            # All orders may have been cancelled during navigation
+            if not self._batch_orders:
+                continue
+
             order_ids_str = ", ".join(
                 f"#{o.order_id.split('-', 1)[-1]}" for o in self._batch_orders
             )
@@ -531,6 +537,14 @@ class DriverRouteWorkflow:
 
             self._status = "idle"
             self._path_history.clear()
+            # Update FleetState so the UI shows idle + clear trail
+            await workflow.execute_activity(
+                set_driver_idle,
+                driver_id,
+                task_queue=DELIVERY_QUEUE,
+                start_to_close_timeout=timedelta(seconds=10),
+                retry_policy=FAST_RETRY,
+            )
 
         return f"Driver {driver_id} completed {len(delivered)} deliveries: {delivered}"
 
@@ -1035,7 +1049,7 @@ class MeltdownDemoWorkflow:
 
         if needs_reassign:
             original = driver_id
-            driver_id = ""  # Reset — must find a valid fallback
+            reassigned = False
             for fallback_id in DRIVER_IDS:
                 if fallback_id == original:
                     continue
@@ -1045,6 +1059,7 @@ class MeltdownDemoWorkflow:
                     continue
                 if len(self._driver_orders.get(fallback_id, [])) < DRIVER_CAPACITY:
                     driver_id = fallback_id
+                    reassigned = True
                     reason = "invalid" if original not in self._route_handles else (
                         "disconnected" if original in self._disconnected_drivers else "at capacity"
                     )
@@ -1054,20 +1069,14 @@ class MeltdownDemoWorkflow:
                     )
                     break
 
-            if not driver_id:
-                # No driver available — force-assign to first non-disconnected
-                # driver even if at capacity (better than dropping the order)
-                for fallback_id in DRIVER_IDS:
-                    if (
-                        fallback_id not in self._disconnected_drivers
-                        and fallback_id in self._route_handles
-                    ):
-                        driver_id = fallback_id
-                        workflow.logger.warning(
-                            f"No capacity — force-assigning "
-                            f"{order.order_id} to {driver_id}"
-                        )
-                        break
+            if not reassigned:
+                # All drivers unavailable — keep original driver_id so the
+                # order is queued on its route handle (delivered on reconnect)
+                driver_id = original if original in self._route_handles else DRIVER_IDS[0]
+                workflow.logger.warning(
+                    f"No available drivers — queuing "
+                    f"{order.order_id} on {driver_id}"
+                )
 
         # Register final assignment AFTER capacity check so SQLite gets the correct driver
         await workflow.execute_activity(

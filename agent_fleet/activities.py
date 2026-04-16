@@ -382,13 +382,15 @@ async def deliver_order(inp: DeliverInput) -> DeliverOutput:
 
     Driver physically delivers, then checks connection to report.
     If disconnected, Temporal retries until reconnected.
+    CANCELLED is a terminal state — update_order_status and
+    complete_order_delivery both refuse to overwrite it.
     """
     await fleet.set_driver_status(inp.driver_id, DriverStatus.DELIVERING)
     await fleet.update_order_status(inp.order_id, OrderStatus.IN_TRANSIT, "Delivering")
 
     await asyncio.sleep(1.5)
 
-    # UI projection — mark order delivered and update driver status
+    # Mark delivered (atomic: won't overwrite CANCELLED)
     remaining_count = await fleet.complete_order_delivery(inp.driver_id, inp.order_id)
     if remaining_count == 0:
         await fleet.set_driver_status(inp.driver_id, DriverStatus.IDLE)
@@ -473,6 +475,16 @@ async def execute_customer_change(
         activity.logger.info(f"Order {inp.order_id} rerouted to {dest}")
 
     return ExecuteCustomerChangeOutput(success=True)
+
+
+# --- Driver status + position sync activities ---
+
+
+@activity.defn
+async def set_driver_idle(driver_id: str) -> None:
+    """Set a driver to idle and clear path history in FleetState."""
+    await fleet.set_driver_status(driver_id, DriverStatus.IDLE)
+    await fleet.clear_driver_path_history(driver_id)
 
 
 # --- Position sync activity ---

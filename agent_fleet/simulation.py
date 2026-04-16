@@ -425,9 +425,22 @@ class FleetState:
         await self._log_event(conn, f"Order {order_id} assigned to {driver_id}")
         await conn.commit()
 
+    # Terminal states — once an order reaches these, no other status can overwrite
+    _TERMINAL_STATUSES = {OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value}
+
     async def update_order_status(self, order_id: str, status: OrderStatus, note: str = "") -> None:
         conn = await self._get_conn()
-        await conn.execute("UPDATE orders SET status=? WHERE order_id=?", (status.value, order_id))
+        # Terminal states can only be set explicitly, never overwritten
+        if status.value not in self._TERMINAL_STATUSES:
+            await conn.execute(
+                "UPDATE orders SET status=? WHERE order_id=? AND status NOT IN (?, ?)",
+                (status.value, order_id, OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value),
+            )
+        else:
+            await conn.execute(
+                "UPDATE orders SET status=? WHERE order_id=?",
+                (status.value, order_id),
+            )
         if note:
             await conn.execute(
                 "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",

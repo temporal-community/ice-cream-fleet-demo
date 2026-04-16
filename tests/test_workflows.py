@@ -24,6 +24,7 @@ from agent_fleet.activities import (
     navigate_to,
     pickup_orders,
     publish_agent_event,
+    set_driver_idle,
     sync_driver_position,
 )
 from agent_fleet.locations import VENUES
@@ -65,6 +66,7 @@ async def run_delivery_workers(env: WorkflowEnvironment):
             get_fleet_status,
             get_order_priorities,
             publish_agent_event,
+            set_driver_idle,
             sync_driver_position,
         ],
     )
