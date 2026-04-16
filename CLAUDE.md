@@ -85,7 +85,7 @@ and FastAPI server (`python -m agent_fleet.server`). No manual Temporal setup ne
 - Random order generation from 3 Las Vegas venues (`locations.py`)
 - Drivers use letter IDs: `driver-a` through `driver-e`, displayed as `Driver-A` etc.
 - Ice cream shop is "Ziggy's Ice Cream" (`WAREHOUSE_LABEL` in `locations.py`)
-- Max 30 orders per demo run, drivers batch up to 3 orders (`DRIVER_CAPACITY`)
+- Max 50 orders per demo run, drivers batch up to 3 orders (`DRIVER_CAPACITY`)
 
 ## Commands
 

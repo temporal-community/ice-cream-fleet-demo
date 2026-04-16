@@ -64,6 +64,50 @@ async def test_assign_order_to_driver():
     assert "order-1" in driver.current_orders
 
 
+async def test_assign_order_idempotent():
+    """Calling assign_order_to_driver twice returns False on second call."""
+    from agent_fleet.models import Coords
+
+    await fleet.register_order(
+        order_id="order-1",
+        hotel="MGM Grand",
+        label="MGM test",
+        priority="standard",
+        servings=40,
+        delivery_coords=Coords(lat=36.1024, lng=-115.1725),
+        deadline_minutes=30,
+    )
+    # First assignment succeeds
+    result = await fleet.assign_order_to_driver("driver-a", "order-1")
+    assert result is True
+
+    # Second assignment is a no-op (already ASSIGNED)
+    result = await fleet.assign_order_to_driver("driver-a", "order-1")
+    assert result is False
+
+
+async def test_assign_order_skips_cancelled():
+    """Assignment is a no-op for cancelled orders."""
+    from agent_fleet.models import Coords
+
+    await fleet.register_order(
+        order_id="order-1",
+        hotel="MGM Grand",
+        label="MGM test",
+        priority="vip",
+        servings=50,
+        delivery_coords=Coords(lat=36.1024, lng=-115.1725),
+        deadline_minutes=30,
+    )
+    await fleet.cancel_order("order-1")
+
+    result = await fleet.assign_order_to_driver("driver-a", "order-1")
+    assert result is False
+
+    order = await fleet.get_order("order-1")
+    assert order.status == OrderStatus.CANCELLED
+
+
 async def test_assign_order_degraded_flag():
     """Orders assigned while Fleet Agent is offline should have degraded=True."""
     from agent_fleet.models import Coords

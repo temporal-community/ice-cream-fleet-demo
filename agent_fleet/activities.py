@@ -240,10 +240,13 @@ async def generate_order(inp: GenerateOrderInput) -> GenerateOrderOutput:
 
 
 @activity.defn
-async def register_assignment(driver_id: str, order_id: str, degraded: bool = False) -> str:
-    """Register an ADK-decided assignment in fleet state (UI projection)."""
-    await fleet.assign_order_to_driver(driver_id, order_id, degraded=degraded)
-    return f"Assigned {order_id} to {driver_id}"
+async def register_assignment(driver_id: str, order_id: str, degraded: bool = False) -> bool:
+    """Register an ADK-decided assignment in fleet state (UI projection).
+
+    Returns True if assignment was written, False if order was already
+    in a terminal state (cancelled/delivered/assigned).
+    """
+    return await fleet.assign_order_to_driver(driver_id, order_id, degraded=degraded)
 
 
 @activity.defn

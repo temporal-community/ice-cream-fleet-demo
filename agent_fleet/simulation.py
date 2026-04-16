@@ -419,7 +419,7 @@ class FleetState:
 
     async def assign_order_to_driver(
         self, driver_id: str, order_id: str, *, degraded: bool = False
-    ) -> None:
+    ) -> bool:
         """Assign a single order to a driver.
 
         Won't overwrite terminal states (CANCELLED/DELIVERED).
@@ -427,9 +427,10 @@ class FleetState:
         conn = await self._get_conn()
         cursor = await conn.execute(
             "UPDATE orders SET assigned_driver_id=?, status=?, degraded=? "
-            "WHERE order_id=? AND status NOT IN (?, ?)",
+            "WHERE order_id=? AND status NOT IN (?, ?, ?)",
             (driver_id, OrderStatus.ASSIGNED.value, 1 if degraded else 0,
-             order_id, OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value),
+             order_id, OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value,
+             OrderStatus.ASSIGNED.value),
         )
         if cursor.rowcount > 0:
             await conn.execute(
@@ -445,6 +446,7 @@ class FleetState:
             )
             await self._log_event(conn, f"Order {order_id} assigned to {driver_id}")
         await conn.commit()
+        return cursor.rowcount > 0
 
     # Terminal states — once an order reaches these, no other status can overwrite
     _TERMINAL_STATUSES = {OrderStatus.CANCELLED.value, OrderStatus.DELIVERED.value}
