@@ -88,6 +88,38 @@ The key design principles:
 - **Workflows own state, activities are pure.** Activities receive everything they need as inputs — they never read shared state for decision-making. The server queries workflows directly for the frontend.
 - **Disconnect uses Temporal retry.** Activities check FleetState for disconnect (simulates network unreachability), fail, and Temporal retries with backoff. The delivery actor finishes its delivery but can't report back. On reconnect, a `sync_driver_position` activity reads the actual position from FleetState so the workflow resumes from where the driver actually is — no teleporting. Completed deliveries are not repeated; the batch continues from the next pending order.
 
+### Communication patterns — what goes where, and why
+
+The demo deliberately routes different kinds of data through different mechanisms. This is the part new Temporal users most often get wrong: they put everything in signals or in workflow state, and the event log blows up. Getting this boundary right is what keeps histories clean at scale.
+
+**Which mechanism for which data:**
+
+| Data flow | Mechanism | Why |
+|-----------|-----------|-----|
+| Driver position (updates every ~400ms during navigation) | Shared state (FleetState / SQLite) | High-frequency telemetry. No workflow decision depends on sub-second position. Routing this through signals would bloat the event log by ~100× for no benefit. |
+| Delivery completed | Child → parent signal (`order_delivered`) | Milestone event. Parent needs it for bookkeeping (`_driver_orders`, `_driver_last_position`) and as input to the next ADK assignment. One signal per delivery. |
+| New order generated | Child → parent signal (`new_order`) | Milestone. Low frequency (one per order, ~10s cadence). Parent's assignment loop waits on it. |
+| Order assignment | Parent → child signal (`add_order`) | Parent decides, child executes. Signal is the durable handoff. |
+| Customer change (address or cancel) | External → parent → child signal chain | Preserves replay + audit trail. Every approval/rejection is in the event log. |
+| Driver snapshot for ADK reasoning | Read from parent's in-memory workflow state | Pure workflow-local read — no cross-workflow access needed because the parent already tracks the bookkeeping it decides on. |
+
+Both child → parent signals are **guarded with try/except** so a terminated parent (e.g. during demo reset) can't crash the child mid-delivery. `workflow.info().parent.workflow_id` supplies the parent id dynamically — no hardcoded string coupling.
+
+**Temporal event log vs shared state — two different questions:**
+
+| Temporal event log | Shared state (SQLite/FleetState) |
+|---|---|
+| Durable, append-only, replayable | Mutable, last-writer-wins, disposable |
+| Answers *"how did we get here?"* | Answers *"where are we now?"* |
+| Every activity + signal + timer is recorded | Whatever you choose to write goes in |
+| Indexed by workflow ID, searchable forever | Overwritten on next tick |
+| Bloats linearly with workflow complexity | Doesn't affect Temporal at all |
+| Source of truth for workflow replay | Source of truth for the UI's live view |
+
+Both are "state" in a loose sense, but they answer different questions. Your event log is the *audit trail of decisions*. Shared state is the *current view for rendering*. A production Temporal system typically pairs Temporal with Redis or Postgres for exactly this split — in the demo, SQLite is the toy stand-in for that side store.
+
+**What about queries between workflows?** Not a thing in Temporal Python (or any Temporal SDK, by design). Queries have to be deterministic-safe, and a synchronous cross-workflow query would break that — what if the other workflow isn't loaded on any worker? What if its state changes between replays? So queries are always *client-initiated*, from outside the cluster. From within a workflow you have three tools for cross-workflow coordination: signals (async events), `start_child_workflow` / awaiting child results (lifecycle), and activities that use the client to query a workflow (adds an activity round-trip — possible but rarely worth it). For the demo's needs, signal-based push is the idiomatic answer.
+
 ### Where the ADK agents fit
 
 In **live mode**, the agents run **inline in the workflow** via `_run_adk_assignment()` in `MeltdownDemoWorkflow`. The workflow builds `DriverSnapshot`s from its own state and passes them to the ADK pipeline. Each LLM call and tool call becomes a Temporal activity via `TemporalModel` and `activity_tool` — the workflow code never calls an explicit `reason_about_assignment` activity. If an activity fails, Temporal retries. There is no fallback to mock.

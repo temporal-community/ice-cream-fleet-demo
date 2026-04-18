@@ -31,6 +31,7 @@ with workflow.unsafe.imports_passed_through():
         execute_customer_change,
         generate_order,
         get_route_polyline,
+        increment_signal_counter,
         navigate_to,
         pickup_orders,
         publish_agent_event,
@@ -80,9 +81,22 @@ NAV_RETRY = RetryPolicy(
 MAX_ORDERS = 50
 ORDER_INTERVAL_SECONDS = 10
 
-PARENT_WORKFLOW_ID = "meltdown-demo"
 DRIVER_CAPACITY = 3
 DRIVER_IDS = ["driver-a", "driver-b", "driver-c", "driver-d", "driver-e"]
+
+
+async def _count_signal() -> None:
+    """Bump the architecture-pattern signal counter shown in the demo header.
+
+    Fired (via a local activity on the workflow worker) after each successful
+    cross-workflow signal, so the audience can see milestone-signal volume
+    next to high-frequency state writes.
+    """
+    await workflow.execute_local_activity(
+        increment_signal_counter,
+        start_to_close_timeout=timedelta(seconds=5),
+        retry_policy=FAST_RETRY,
+    )
 
 
 # --- Per-driver continuous delivery workflow ---
@@ -153,9 +167,7 @@ class DriverRouteWorkflow:
     async def update_pending(self, inp: OrderUpdateInput) -> None:
         """Signal that a customer change is submitted — driver should hold before delivery."""
         self._update_pending_order = inp.order_id
-        workflow.logger.info(
-            f"Order {inp.order_id} — update pending, will hold before delivery"
-        )
+        workflow.logger.info(f"Order {inp.order_id} — update pending, will hold before delivery")
 
     @workflow.signal
     async def resolve_update(self, inp: OrderUpdateInput) -> None:
@@ -165,9 +177,7 @@ class DriverRouteWorkflow:
             self._update_new_lat = inp.new_lat
         if inp.new_lng is not None:
             self._update_new_lng = inp.new_lng
-        workflow.logger.info(
-            f"Order {inp.order_id} — update resolved: {inp.change_type}"
-        )
+        workflow.logger.info(f"Order {inp.order_id} — update resolved: {inp.change_type}")
 
     @workflow.signal
     async def cancel_order(self, inp: OrderUpdateInput) -> None:
@@ -292,9 +302,7 @@ class DriverRouteWorkflow:
                     retry_policy=FAST_RETRY,
                 )
                 self._current_lat, self._current_lng = pos[0], pos[1]
-                workflow.logger.info(
-                    f"Position synced to ({pos[0]:.4f}, {pos[1]:.4f})"
-                )
+                workflow.logger.info(f"Position synced to ({pos[0]:.4f}, {pos[1]:.4f})")
 
             # --- Batch pickup: collect all pending orders, drive to shop once ---
             self._batch_orders = []
@@ -401,9 +409,7 @@ class DriverRouteWorkflow:
 
                 # Check for cancel before navigating
                 if self._cancel_pending:
-                    workflow.logger.info(
-                        f"Order {order.order_id} cancelled — skipping"
-                    )
+                    workflow.logger.info(f"Order {order.order_id} cancelled — skipping")
                     self._active_order_id = None
                     self._cancel_pending = False
                     try:
@@ -457,12 +463,9 @@ class DriverRouteWorkflow:
                 if self._update_pending_order == order.order_id:
                     self._status = "awaiting_update"
                     workflow.logger.info(
-                        f"[{order.order_id}] Holding at {order.hotel} "
-                        f"— awaiting HITL decision"
+                        f"[{order.order_id}] Holding at {order.hotel} — awaiting HITL decision"
                     )
-                    await workflow.wait_condition(
-                        lambda: self._update_decision is not None
-                    )
+                    await workflow.wait_condition(lambda: self._update_decision is not None)
 
                 # Process decision if one was made FOR THIS ORDER only
                 if (
@@ -474,9 +477,7 @@ class DriverRouteWorkflow:
                     self._update_decision = None
 
                     if decision == "cancel":
-                        workflow.logger.info(
-                            f"[{order.order_id}] HITL cancel approved"
-                        )
+                        workflow.logger.info(f"[{order.order_id}] HITL cancel approved")
                         self._cancel_pending = True
                     elif decision == "address_change":
                         # Reroute: update destination and re-navigate
@@ -543,24 +544,30 @@ class DriverRouteWorkflow:
                     )
                     delivered.append(order.order_id)
 
-                    # Signal parent — only when delivery actually happened
-                    if workflow.info().parent:
-                        parent = workflow.get_external_workflow_handle(
-                            PARENT_WORKFLOW_ID
-                        )
-                        await parent.signal(
-                            "order_delivered",
-                            OrderDeliveredInput(
-                                driver_id=driver_id,
-                                order_id=order.order_id,
-                                delivery_lat=order.delivery_lat,
-                                delivery_lng=order.delivery_lng,
-                            ),
+                    # Signal parent — guarded so a terminated parent (e.g. during
+                    # demo reset) doesn't raise and fail this child mid-delivery.
+                    # info().parent.workflow_id avoids coupling to a hardcoded id.
+                    try:
+                        parent_info = workflow.info().parent
+                        if parent_info is not None:
+                            parent = workflow.get_external_workflow_handle(parent_info.workflow_id)
+                            await parent.signal(
+                                "order_delivered",
+                                OrderDeliveredInput(
+                                    driver_id=driver_id,
+                                    order_id=order.order_id,
+                                    delivery_lat=order.delivery_lat,
+                                    delivery_lng=order.delivery_lng,
+                                ),
+                            )
+                            await _count_signal()
+                    except Exception as e:
+                        workflow.logger.warning(
+                            f"Could not signal parent with order_delivered for "
+                            f"{order.order_id}: {e}"
                         )
                 else:
-                    workflow.logger.info(
-                        f"[{order.order_id}] Delivery skipped — cancelled"
-                    )
+                    workflow.logger.info(f"[{order.order_id}] Delivery skipped — cancelled")
 
                 self._active_order_id = None
                 self._cancel_pending = False
@@ -665,23 +672,33 @@ class OrderGenerationWorkflow:
                 retry_policy=FAST_RETRY,
             )
 
-            # Signal parent with the new order
-            parent = workflow.get_external_workflow_handle(PARENT_WORKFLOW_ID)
-            await parent.signal(
-                "new_order",
-                OrderAssignmentResult(
-                    order_id=order.order_id,
-                    hotel=order.hotel,
-                    delivery_lat=order.delivery_lat,
-                    delivery_lng=order.delivery_lng,
-                    driver_id="",  # Not yet assigned — parent handles assignment
-                    reasoning_summary="",
-                    priority=order.priority,
-                    servings=order.servings,
-                    deadline_minutes=order.deadline_minutes,
-                    event=order.event,
-                ),
-            )
+            # Signal parent with the new order — guarded (same rationale as
+            # DriverRouteWorkflow.order_delivered): a terminated parent during
+            # demo reset must not fail this child.
+            try:
+                parent_info = workflow.info().parent
+                if parent_info is not None:
+                    parent = workflow.get_external_workflow_handle(parent_info.workflow_id)
+                    await parent.signal(
+                        "new_order",
+                        OrderAssignmentResult(
+                            order_id=order.order_id,
+                            hotel=order.hotel,
+                            delivery_lat=order.delivery_lat,
+                            delivery_lng=order.delivery_lng,
+                            driver_id="",  # Not yet assigned — parent handles assignment
+                            reasoning_summary="",
+                            priority=order.priority,
+                            servings=order.servings,
+                            deadline_minutes=order.deadline_minutes,
+                            event=order.event,
+                        ),
+                    )
+                    await _count_signal()
+            except Exception as e:
+                workflow.logger.warning(
+                    f"Could not signal parent with new order {order.order_id}: {e}"
+                )
 
             workflow.logger.info(
                 f"Order {order_num}/{inp.max_orders}: {order.order_id} signaled to parent"
@@ -898,6 +915,7 @@ class MeltdownDemoWorkflow:
         for handle in self._route_handles.values():
             try:
                 await handle.signal(DriverRouteWorkflow.stop)
+                await _count_signal()
             except Exception:
                 pass
 
@@ -1166,12 +1184,17 @@ class MeltdownDemoWorkflow:
                 if len(self._driver_orders.get(fallback_id, [])) < DRIVER_CAPACITY:
                     driver_id = fallback_id
                     reassigned = True
-                    reason = "invalid" if original not in self._route_handles else (
-                        "disconnected" if original in self._disconnected_drivers else "at capacity"
+                    reason = (
+                        "invalid"
+                        if original not in self._route_handles
+                        else (
+                            "disconnected"
+                            if original in self._disconnected_drivers
+                            else "at capacity"
+                        )
                     )
                     workflow.logger.warning(
-                        f"Reassigning {order.order_id}: {original} is {reason} "
-                        f"→ {driver_id}"
+                        f"Reassigning {order.order_id}: {original} is {reason} → {driver_id}"
                     )
                     break
 
@@ -1180,8 +1203,7 @@ class MeltdownDemoWorkflow:
                 # order is queued on its route handle (delivered on reconnect)
                 driver_id = original if original in self._route_handles else DRIVER_IDS[0]
                 workflow.logger.warning(
-                    f"No available drivers — queuing "
-                    f"{order.order_id} on {driver_id}"
+                    f"No available drivers — queuing {order.order_id} on {driver_id}"
                 )
 
         # Register final assignment AFTER capacity check
@@ -1198,16 +1220,13 @@ class MeltdownDemoWorkflow:
         # Skip workflow state + child signal if DB write was a no-op
         # (order already cancelled/delivered/assigned)
         if not assigned:
-            workflow.logger.info(
-                f"{order.order_id} assignment skipped — already terminal"
-            )
+            workflow.logger.info(f"{order.order_id} assignment skipped — already terminal")
             return
 
         # Update workflow-owned driver state (skip if already assigned —
         # prevents duplicate signals when fallback re-assigns to same driver)
         already_assigned = (
-            driver_id in self._driver_orders
-            and order.order_id in self._driver_orders[driver_id]
+            driver_id in self._driver_orders and order.order_id in self._driver_orders[driver_id]
         )
         if driver_id in self._driver_orders and not already_assigned:
             self._driver_orders[driver_id].append(order.order_id)
@@ -1219,9 +1238,7 @@ class MeltdownDemoWorkflow:
 
         # Signal the chosen driver (skip if already assigned)
         if already_assigned:
-            workflow.logger.info(
-                f"{order.order_id} already on {driver_id} — skipping signal"
-            )
+            workflow.logger.info(f"{order.order_id} already on {driver_id} — skipping signal")
         elif driver_id in self._route_handles:
             await self._route_handles[driver_id].signal(
                 DriverRouteWorkflow.add_order,
@@ -1232,6 +1249,7 @@ class MeltdownDemoWorkflow:
                     delivery_lng=order.delivery_lng,
                 ),
             )
+            await _count_signal()
 
         workflow.logger.info(f"Order {self._orders_generated}: {order.order_id} → {driver_id}")
 
@@ -1272,6 +1290,7 @@ class MeltdownDemoWorkflow:
                     change_type=change.change_type,
                 ),
             )
+            await _count_signal()
 
         await workflow.execute_local_activity(
             publish_agent_event,
@@ -1320,6 +1339,7 @@ class MeltdownDemoWorkflow:
                         change_type=change.change_type,
                     ),
                 )
+                await _count_signal()
                 # For pending/batched orders: also send cancel_order or
                 # update_order so the order is immediately removed/updated
                 # without a wasted navigation trip
@@ -1331,6 +1351,7 @@ class MeltdownDemoWorkflow:
                             change_type=change.change_type,
                         ),
                     )
+                    await _count_signal()
                 elif change.change_type == "address_change":
                     await self._route_handles[driver_id].signal(
                         DriverRouteWorkflow.update_order,
@@ -1341,6 +1362,7 @@ class MeltdownDemoWorkflow:
                             new_lng=change.new_lng,
                         ),
                     )
+                    await _count_signal()
                 # Resolve the HITL hold for active orders
                 await self._route_handles[driver_id].signal(
                     DriverRouteWorkflow.resolve_update,
@@ -1351,11 +1373,10 @@ class MeltdownDemoWorkflow:
                         new_lng=change.new_lng,
                     ),
                 )
+                await _count_signal()
                 if change.change_type == "cancel":
                     try:
-                        self._driver_orders[driver_id].remove(
-                            change.order_id
-                        )
+                        self._driver_orders[driver_id].remove(change.order_id)
                     except (KeyError, ValueError):
                         pass
             await workflow.execute_local_activity(
@@ -1380,6 +1401,7 @@ class MeltdownDemoWorkflow:
                         change_type="release",
                     ),
                 )
+                await _count_signal()
             await workflow.execute_local_activity(
                 publish_agent_event,
                 PublishAgentEventInput(

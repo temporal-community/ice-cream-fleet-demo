@@ -343,9 +343,7 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
         activity.logger.warning(
             f"{inp.driver_id} arrived at {leg} but is disconnected — cannot report"
         )
-        raise RuntimeError(
-            f"Driver {inp.driver_id} arrived but is disconnected — cannot check in"
-        )
+        raise RuntimeError(f"Driver {inp.driver_id} arrived but is disconnected — cannot check in")
 
     activity.logger.info(
         f"{inp.driver_id} arrived at {leg} ({inp.target_lat:.4f}, {inp.target_lng:.4f})"
@@ -390,9 +388,7 @@ async def deliver_order(inp: DeliverInput) -> DeliverOutput:
     """
     # Fail-fast if disconnected — don't mutate visible state before checking
     if await fleet.is_driver_disconnected(inp.driver_id):
-        raise RuntimeError(
-            f"Driver {inp.driver_id} disconnected — cannot deliver"
-        )
+        raise RuntimeError(f"Driver {inp.driver_id} disconnected — cannot deliver")
 
     await fleet.set_driver_status(inp.driver_id, DriverStatus.DELIVERING)
     await fleet.update_order_status(inp.order_id, OrderStatus.IN_TRANSIT, "Delivering")
@@ -406,9 +402,7 @@ async def deliver_order(inp: DeliverInput) -> DeliverOutput:
 
     # Final disconnect check — delivery committed but can't report
     if await fleet.is_driver_disconnected(inp.driver_id):
-        raise RuntimeError(
-            f"Driver {inp.driver_id} delivered but cannot report — disconnected"
-        )
+        raise RuntimeError(f"Driver {inp.driver_id} delivered but cannot report — disconnected")
 
     activity.logger.info(f"{inp.driver_id} delivered {inp.order_id}")
     return DeliverOutput(driver_id=inp.driver_id, order_id=inp.order_id, success=True)
@@ -454,6 +448,17 @@ async def publish_agent_events_batch(
             evt.agent_name, evt.event_type, evt.content, summary=evt.summary
         )
     return PublishAgentEventOutput(success=True)
+
+
+@activity.defn
+async def increment_signal_counter(n: int = 1) -> None:
+    """Increment the architecture-pattern signal counter in FleetState.
+
+    Called from workflows via local activity after each cross-workflow
+    signal is fired, so the frontend badge can show milestones-vs-telemetry
+    volume for the audience.
+    """
+    await fleet.increment_signal_count(n)
 
 
 # --- Customer change activities ---

@@ -54,6 +54,18 @@ Use this framing at the start of the talk before any demo:
 - ADK manages the multi-turn reasoning loop — the developer just defines the agents and wires them together
 
 
+## Architecture Talking Points
+
+These are optional drop-ins for mid-demo — when the conversation turns to scale, or to what "production Temporal" actually looks like. Point at the Temporal UI event history on one screen and the driver positions streaming on the other.
+
+- **"Notice the event log is tiny."** A full demo run produces ~200 Temporal events total (activities, signals, timers) — one per meaningful decision or milestone. Meanwhile the drivers are updating position ~400ms during navigation. That high-frequency telemetry never touches Temporal — it goes to a side store (SQLite here; Redis or Postgres in production). **Temporal is for orchestration and decisions, not telemetry.**
+- **"Why not signal position to the parent?"** You could. You'd also 100× your event history, make the Temporal UI unreadable, and pay durability cost on data no decision depends on. The pattern is: signals for *milestones* (delivery completed, new order), shared state for *continuous data* (where is the car right now).
+- **"What about queries between workflows?"** Temporal doesn't support workflow-to-workflow queries — by design, because workflows have to replay deterministically. Cross-workflow coordination uses signals (durable async events). If the parent needs to "read" child state, the child pushes milestone events to the parent; the parent tracks the bookkeeping it decides on and doesn't try to mirror every field the child owns.
+
+Full breakdown of the communication choices and the event-log-vs-shared-state split lives in [HOW_IT_WORKS.md — Communication patterns](HOW_IT_WORKS.md#communication-patterns--what-goes-where-and-why).
+
+---
+
 ## Demo Scenarios
 
 ---

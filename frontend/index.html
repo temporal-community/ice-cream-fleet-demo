@@ -141,6 +141,20 @@
     height: 24px;
     background: #465a78;
   }
+  .arch-badge {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px;
+    line-height: 1.2;
+    color: #94a3b8;
+    letter-spacing: 0.3px;
+  }
+  .arch-badge-row { display: flex; gap: 6px; }
+  .arch-badge-label { color: #64748b; }
+  .arch-badge-value { color: #e2e8f0; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 3ch; text-align: right; }
+  .arch-badge-hint { font-size: 9px; color: #475569; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 1px; }
 
   /* --- Tab bar + panels --- */
   .tab-bar {
@@ -1075,6 +1089,18 @@
     </h1>
   </div>
   <div class="header-right">
+    <div class="arch-badge" title="Milestones go to Temporal as signals (durable, replayable). Continuous telemetry (driver positions) goes to shared state (SQLite). Both are 'state,' but they answer different questions.">
+      <div class="arch-badge-row">
+        <span class="arch-badge-label">Signals:</span>
+        <span class="arch-badge-value" id="arch-signal-count">0</span>
+      </div>
+      <div class="arch-badge-row">
+        <span class="arch-badge-label">State writes:</span>
+        <span class="arch-badge-value" id="arch-state-write-count">0</span>
+      </div>
+      <div class="arch-badge-hint">milestones · telemetry</div>
+    </div>
+    <div class="header-divider"></div>
     <a href="https://github.com/temporal-community/ice-cream-fleet-demo" target="_blank" class="header-brand" style="text-decoration:none;">
       <img src="/static/img/temporal_logo.svg" alt="Temporal" title="Temporal — View on GitHub" style="height:40px;" />
     </a>
@@ -1475,6 +1501,15 @@ const crewMarkers = {};
 const crewTrails = {};
 let workerOnline = true;
 
+// --- Architecture counters (header badge) ---
+function updateArchCounters(counters) {
+  if (!counters) return;
+  const sig = document.getElementById('arch-signal-count');
+  const state = document.getElementById('arch-state-write-count');
+  if (sig) sig.textContent = (counters.signal_count ?? 0).toLocaleString();
+  if (state) state.textContent = (counters.state_write_count ?? 0).toLocaleString();
+}
+
 // --- WebSocket ---
 let ws;
 function connectWS() {
@@ -1487,6 +1522,7 @@ function connectWS() {
     updateChangeOrderDropdown(state.orders);
     updateAgentEvents(state.agent_events, state.agent_health);
     updateCrewDisconnectBanner(state.drivers);
+    updateArchCounters(state.counters);
   };
   ws.onclose = () => setTimeout(connectWS, 1000);
 }
