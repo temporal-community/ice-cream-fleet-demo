@@ -135,6 +135,7 @@ class DriverRouteWorkflow:
         self._update_decision: str | None = None  # "cancel", "address_change", "release"
         self._update_new_lat: float | None = None
         self._update_new_lng: float | None = None
+        self._update_new_hotel: str | None = None
         self._cancel_pending: bool = False
         self._batch_orders: list[DriverRouteOrder] = []
 
@@ -177,6 +178,8 @@ class DriverRouteWorkflow:
             self._update_new_lat = inp.new_lat
         if inp.new_lng is not None:
             self._update_new_lng = inp.new_lng
+        if inp.new_hotel is not None:
+            self._update_new_hotel = inp.new_hotel
         workflow.logger.info(f"Order {inp.order_id} — update resolved: {inp.change_type}")
 
     @workflow.signal
@@ -484,8 +487,11 @@ class DriverRouteWorkflow:
                         if self._update_new_lat is not None and self._update_new_lng is not None:
                             order.delivery_lat = self._update_new_lat
                             order.delivery_lng = self._update_new_lng
+                            if self._update_new_hotel is not None:
+                                order.hotel = self._update_new_hotel
                             self._update_new_lat = None
                             self._update_new_lng = None
+                            self._update_new_hotel = None
                             workflow.logger.info(
                                 f"[{order.order_id}] HITL reroute approved — "
                                 f"navigating to new destination"
@@ -1371,6 +1377,7 @@ class MeltdownDemoWorkflow:
                         change_type=change.change_type,
                         new_lat=change.new_lat,
                         new_lng=change.new_lng,
+                        new_hotel=change.new_hotel,
                     ),
                 )
                 await _count_signal()
