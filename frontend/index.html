@@ -154,7 +154,6 @@
   .arch-badge-row { display: flex; gap: 6px; }
   .arch-badge-label { color: #64748b; }
   .arch-badge-value { color: #e2e8f0; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 7ch; text-align: right; }
-  .arch-badge-hint { font-size: 9px; color: #475569; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 1px; }
 
   /* --- Tab bar + panels --- */
   .tab-bar {
@@ -1098,7 +1097,6 @@
         <span class="arch-badge-label">State writes:</span>
         <span class="arch-badge-value" id="arch-state-write-count">0</span>
       </div>
-      <div class="arch-badge-hint">event log · shared-state telemetry</div>
     </div>
     <div class="header-divider"></div>
     <a href="https://github.com/temporal-community/ice-cream-fleet-demo" target="_blank" class="header-brand" style="text-decoration:none;">
@@ -1931,6 +1929,12 @@ async function resetDemo() {
   }
 
   // Force-clear UI regardless of API result
+  // Zero the architecture-pattern counters immediately so the badge doesn't
+  // show stale totals from the previous run until the next WebSocket tick.
+  // With no demo running, state writes don't happen, so without this a user
+  // could see last run's numbers linger indefinitely.
+  updateArchCounters({temporal_event_count: 0, state_write_count: 0});
+
   const el = document.getElementById('worker-status');
   el.className = 'worker-indicator online';
   el.innerHTML = '<div class="worker-dot"></div><span>Service Online</span>';

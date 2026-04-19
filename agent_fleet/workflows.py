@@ -157,7 +157,21 @@ class DriverRouteWorkflow:
 
     @workflow.signal
     async def resolve_update(self, inp: OrderUpdateInput) -> None:
-        """Signal the decision after HITL approval — cancel, reroute, or release."""
+        """Signal the decision after HITL approval — cancel, reroute, or release.
+
+        Guarded: only applies if this resolution is for the order that
+        currently has an active HITL hold. Protects against stale sends —
+        e.g. parent cancels an order via cancel_order (which clears hold
+        state) and then fires a trailing resolve_update("cancel") that,
+        without the guard, would re-pollute _update_decision='cancel' and
+        silently cancel the NEXT order that reached a HITL hold.
+        """
+        if self._update_pending_order != inp.order_id:
+            workflow.logger.info(
+                f"Order {inp.order_id} — resolve_update ignored "
+                f"(no matching hold: pending={self._update_pending_order})"
+            )
+            return
         self._update_decision = inp.change_type  # "cancel", "address_change", "release"
         if inp.new_lat is not None:
             self._update_new_lat = inp.new_lat
@@ -1292,17 +1306,58 @@ class MeltdownDemoWorkflow:
             await self._drain_pending_signals()
 
     async def _drain_pending_signals(self) -> None:
-        # Snapshot all pending changes and process them concurrently. The prior
-        # serial version froze driver B at its hotel while driver A's change
-        # awaited human approval — _process_customer_change blocks on
-        # wait_condition(approvals), so nothing else drained. Concurrent
-        # processing lets each child receive resolve_update independently.
-        # Approvals remain FIFO; for typical demo flow (one change submitted
-        # and approved before the next) attribution is unchanged.
+        # Snapshot pending changes, group by driver, and process them so:
+        #   - Different drivers run concurrently (so driver B isn't frozen at
+        #     its hotel while driver A's change awaits human approval).
+        #   - Changes for the SAME driver run serially. The child has only
+        #     one HITL hold slot (_update_pending_order); two concurrent
+        #     update_pending signals for the same driver would overwrite
+        #     that slot, causing the first order to skip its hold and the
+        #     stale decision from the first approval to fire against the
+        #     second order without human review.
+        # Approval consumption itself is race-safe across groups — see
+        # _wait_for_approval, which re-checks the queue after each wakeup.
         pending = list(self._pending_changes)
         self._pending_changes.clear()
-        if pending:
-            await asyncio.gather(*(self._process_customer_change(c) for c in pending))
+        if not pending:
+            return
+
+        per_driver: dict[str, list[CustomerChangeInput]] = {}
+        for change in pending:
+            # Use the driver if known; fall back to the order_id as a stable
+            # key so unassigned orders don't collapse into one group (and
+            # still serialize per-order, which is fine — serialization is
+            # only strictly needed for same-driver collisions).
+            key = self._find_driver_for_order(change.order_id) or f"unassigned:{change.order_id}"
+            per_driver.setdefault(key, []).append(change)
+
+        async def _process_group(changes: list[CustomerChangeInput]) -> None:
+            for c in changes:
+                await self._process_customer_change(c)
+
+        await asyncio.gather(*(_process_group(g) for g in per_driver.values()))
+
+    async def _wait_for_approval(self) -> bool | None:
+        """Pull the next approval off _pending_approvals, or None if the demo
+        shuts down while waiting.
+
+        Safe under concurrent callers: when two _process_customer_change
+        coroutines are both parked on the approval wait_condition and a
+        single approval arrives, Temporal wakes both in the same task. The
+        first to run pops; the second re-checks, finds the queue empty,
+        and re-waits. Without this loop the second caller would hit
+        IndexError on pop and crash the parent workflow. Also honors
+        _routes_done so a parked change doesn't block shutdown.
+        """
+        while not self._routes_done:
+            await workflow.wait_condition(
+                lambda: len(self._pending_approvals) > 0 or self._routes_done,
+            )
+            if self._routes_done:
+                return None
+            if self._pending_approvals:
+                return self._pending_approvals.pop(0)
+        return None
 
     # --- Customer change handling ---
 
@@ -1335,9 +1390,13 @@ class MeltdownDemoWorkflow:
             start_to_close_timeout=timedelta(seconds=10),
         )
 
-        # Wait for human approval — workflow pauses here, everything else keeps running
-        await workflow.wait_condition(lambda: len(self._pending_approvals) > 0)
-        approved = self._pending_approvals.pop(0)
+        # Wait for human approval — workflow pauses here, everything else keeps running.
+        # _wait_for_approval handles both the TOCTOU race (two concurrent
+        # coroutines waking from the same approval) and the routes_done
+        # escape (shutdown while parked).
+        approved = await self._wait_for_approval()
+        if approved is None:
+            return
 
         # Re-resolve driver_id — order may have been assigned during the wait
         driver_id = self._find_driver_for_order(change.order_id)
