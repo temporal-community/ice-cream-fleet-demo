@@ -1330,13 +1330,10 @@ class MeltdownDemoWorkflow:
         """Pull the next approval off _pending_approvals, or None if the demo
         shuts down while waiting.
 
-        Safe under concurrent callers: when two _process_customer_change
-        coroutines are both parked on the approval wait_condition and a
-        single approval arrives, Temporal wakes both in the same task. The
-        first to run pops; the second re-checks, finds the queue empty,
-        and re-waits. Without this loop the second caller would hit
-        IndexError on pop and crash the parent workflow. Also honors
-        _routes_done so a parked change doesn't block shutdown.
+        _drain_pending_signals processes serially, so only one caller is ever
+        parked here at a time — the loop exists solely to let _routes_done
+        (demo shutdown) unblock a parked change without requiring an approval.
+        Returns None in that case so the caller can exit cleanly.
         """
         while not self._routes_done:
             await workflow.wait_condition(
@@ -1379,10 +1376,10 @@ class MeltdownDemoWorkflow:
             start_to_close_timeout=timedelta(seconds=10),
         )
 
-        # Wait for human approval — workflow pauses here, everything else keeps running.
-        # _wait_for_approval handles both the TOCTOU race (two concurrent
-        # coroutines waking from the same approval) and the routes_done
-        # escape (shutdown while parked).
+        # Wait for human approval — workflow pauses here, order generation
+        # and other activities keep running. _wait_for_approval returns None
+        # if the demo shuts down (routes_done) while we're parked, so a
+        # pending change can't block the parent's teardown on `await handle`.
         approved = await self._wait_for_approval()
         if approved is None:
             return
