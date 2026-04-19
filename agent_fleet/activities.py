@@ -463,17 +463,6 @@ async def publish_agent_events_batch(
     return PublishAgentEventOutput(success=True)
 
 
-@activity.defn
-async def increment_signal_counter(n: int = 1) -> None:
-    """Increment the architecture-pattern signal counter in FleetState.
-
-    Called from workflows via local activity after each cross-workflow
-    signal is fired, so the frontend badge can show milestones-vs-telemetry
-    volume for the audience.
-    """
-    await fleet.increment_signal_count(n)
-
-
 # --- Customer change activities ---
 
 

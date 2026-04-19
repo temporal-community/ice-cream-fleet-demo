@@ -1089,16 +1089,16 @@
     </h1>
   </div>
   <div class="header-right">
-    <div class="arch-badge" title="Milestones are cross-workflow signals — durable, replayable, in Temporal's event log. State writes are driver position ticks — continuous telemetry kept in shared state (SQLite). Both are 'state,' but they answer different questions.">
+    <div class="arch-badge" title="Temporal events is the real length of the workflow event histories (activities, signals, timers) — what Temporal is actually tracking. State writes is driver position ticks kept in shared state (SQLite) — telemetry we deliberately keep out of the event log. Both are 'state' but they answer different questions.">
       <div class="arch-badge-row">
-        <span class="arch-badge-label">Milestones:</span>
-        <span class="arch-badge-value" id="arch-signal-count">0</span>
+        <span class="arch-badge-label">Temporal events:</span>
+        <span class="arch-badge-value" id="arch-temporal-event-count">0</span>
       </div>
       <div class="arch-badge-row">
         <span class="arch-badge-label">State writes:</span>
         <span class="arch-badge-value" id="arch-state-write-count">0</span>
       </div>
-      <div class="arch-badge-hint">temporal signals · shared-state telemetry</div>
+      <div class="arch-badge-hint">event log · shared-state telemetry</div>
     </div>
     <div class="header-divider"></div>
     <a href="https://github.com/temporal-community/ice-cream-fleet-demo" target="_blank" class="header-brand" style="text-decoration:none;">
@@ -1504,9 +1504,9 @@ let workerOnline = true;
 // --- Architecture counters (header badge) ---
 function updateArchCounters(counters) {
   if (!counters) return;
-  const sig = document.getElementById('arch-signal-count');
+  const tev = document.getElementById('arch-temporal-event-count');
   const state = document.getElementById('arch-state-write-count');
-  if (sig) sig.textContent = (counters.signal_count ?? 0).toLocaleString();
+  if (tev) tev.textContent = (counters.temporal_event_count ?? 0).toLocaleString();
   if (state) state.textContent = (counters.state_write_count ?? 0).toLocaleString();
 }
 

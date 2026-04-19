@@ -118,6 +118,8 @@ Both child → parent signals are **guarded with try/except** so a terminated pa
 
 Both are "state" in a loose sense, but they answer different questions. Your event log is the *audit trail of decisions*. Shared state is the *current view for rendering*. A production Temporal system typically pairs Temporal with Redis or Postgres for exactly this split — in the demo, SQLite is the toy stand-in for that side store.
 
+**Seeing the split live.** The header badge in the demo UI shows two running counts: **Temporal events** (the real length of the workflow event histories, read server-side via `describe()` on each demo workflow) and **State writes** (every call to `update_driver_position`, counted in a SQLite counters row). The ratio grows heavily into the state-writes column during a run — that's the design working. If everything went through Temporal you'd see those numbers swap, and every position tick would be a permanent entry in the event log.
+
 **What about queries between workflows?** Not a thing in Temporal Python (or any Temporal SDK, by design). Queries have to be deterministic-safe, and a synchronous cross-workflow query would break that — what if the other workflow isn't loaded on any worker? What if its state changes between replays? So queries are always *client-initiated*, from outside the cluster. From within a workflow you have three tools for cross-workflow coordination: signals (async events), `start_child_workflow` / awaiting child results (lifecycle), and activities that use the client to query a workflow (adds an activity round-trip — possible but rarely worth it). For the demo's needs, signal-based push is the idiomatic answer.
 
 ### Where the ADK agents fit

@@ -156,18 +156,63 @@ async def test_get_driver_position():
     assert abs(lng - (-115.18)) < 0.001
 
 
-async def test_architecture_pattern_counters():
-    """Milestone + state-write counters reset, seed, and increment correctly.
+async def test_is_order_terminal():
+    """deliver_order relies on is_order_terminal to short-circuit retries after
+    a successful DB commit. If this check regresses (e.g. looks at the wrong
+    column or misses DELIVERED/CANCELLED), disconnect/reconnect starts
+    re-running set_driver_status(DELIVERING) on already-delivered orders and
+    the driver visibly sticks as DELIVERING during return-to-base.
+    """
+    from agent_fleet.models import Coords
 
-    These back the header badge that teaches the "milestones via signals,
-    telemetry via shared state" pattern — wrong numbers would undercut the
-    presenter's talking point.
+    await fleet.reset()
+    await fleet.register_order(
+        order_id="order-terminal-test",
+        hotel="MGM Grand",
+        label="terminal test",
+        priority="standard",
+        servings=10,
+        delivery_coords=Coords(lat=36.1024, lng=-115.1725),
+        deadline_minutes=30,
+    )
+
+    # Fresh order — not terminal
+    assert await fleet.is_order_terminal("order-terminal-test") is False
+
+    # Unknown order id — False (not True by accident)
+    assert await fleet.is_order_terminal("order-does-not-exist") is False
+
+    # DELIVERED — terminal
+    await fleet.assign_order_to_driver("driver-a", "order-terminal-test")
+    await fleet.complete_order_delivery("driver-a", "order-terminal-test")
+    assert await fleet.is_order_terminal("order-terminal-test") is True
+
+    # CANCELLED — also terminal
+    await fleet.register_order(
+        order_id="order-cancel-test",
+        hotel="MGM Grand",
+        label="cancel test",
+        priority="standard",
+        servings=10,
+        delivery_coords=Coords(lat=36.1024, lng=-115.1725),
+        deadline_minutes=30,
+    )
+    await fleet.cancel_order("order-cancel-test")
+    assert await fleet.is_order_terminal("order-cancel-test") is True
+
+
+async def test_state_write_counter():
+    """state_write_count resets, seeds at zero, and increments on every
+    position write. Paired in the header badge with a server-side Temporal
+    event-log count read via describe() — no workflow-side signal counter
+    to assert here. A zeroed or broken counter would undercut the
+    "milestones via Temporal, telemetry via shared state" talking point.
     """
     await fleet.reset()
 
     # Fresh demo starts at zero
     counters = await fleet.get_counters()
-    assert counters == {"signal_count": 0, "state_write_count": 0}
+    assert counters == {"state_write_count": 0}
 
     # Position writes bump state_write_count (in the same transaction as the
     # driver UPDATE, so a broken counter would also break position persistence).
@@ -175,16 +220,8 @@ async def test_architecture_pattern_counters():
     await fleet.update_driver_position("driver-a", 36.13, -115.19)
     counters = await fleet.get_counters()
     assert counters["state_write_count"] == 2
-    assert counters["signal_count"] == 0
 
-    # Milestone signals bump signal_count independently
-    await fleet.increment_signal_count()
-    await fleet.increment_signal_count(3)
-    counters = await fleet.get_counters()
-    assert counters["signal_count"] == 4
-    assert counters["state_write_count"] == 2
-
-    # Reset zeroes both back to zero
+    # Reset zeroes it back to zero
     await fleet.reset()
     counters = await fleet.get_counters()
-    assert counters == {"signal_count": 0, "state_write_count": 0}
+    assert counters == {"state_write_count": 0}

@@ -314,9 +314,7 @@ async def submit_customer_change(body: CustomerChangeRequest):
     order = await fleet.get_order(body.order_id)
     if order and order.assigned_driver_id:
         try:
-            child = _temporal_client.get_workflow_handle(
-                f"route-{order.assigned_driver_id}"
-            )
+            child = _temporal_client.get_workflow_handle(f"route-{order.assigned_driver_id}")
             await child.signal(
                 "update_pending",
                 OrderUpdateInput(
@@ -371,13 +369,52 @@ async def toggle_escalation():
 # --- State query endpoints ---
 
 
+# Workflow IDs the demo starts — summed for the header's Temporal-events badge.
+_DEMO_WORKFLOW_IDS = ["meltdown-demo", "order-generation"] + [
+    f"route-driver-{letter}" for letter in ("a", "b", "c", "d", "e")
+]
+
+
+async def _describe_history_length(wf_id: str) -> int:
+    """Return the current Temporal event-log length for one workflow, or 0 if unreachable."""
+    if _temporal_client is None:
+        return 0
+    try:
+        handle = _temporal_client.get_workflow_handle(wf_id)
+        desc = await handle.describe()
+        return desc.history_length or 0
+    except Exception:
+        return 0
+
+
+async def _get_temporal_event_count() -> int:
+    """Sum the Temporal event-log lengths across all demo workflows.
+
+    Reads real history counts via describe() rather than maintaining a
+    workflow-side counter. Keeps workflow code free of display plumbing
+    and gives the header badge the actual number of events Temporal is
+    carrying. Calls run concurrently, so total latency ≈ one RPC.
+    """
+    counts = await asyncio.gather(
+        *(_describe_history_length(wf_id) for wf_id in _DEMO_WORKFLOW_IDS)
+    )
+    return sum(counts)
+
+
 async def _build_snapshot() -> dict:
     """Build frontend state from FleetState (SQLite, shared across processes).
 
     Activities write positions, statuses, and agent events to FleetState.
     Server disconnect/reconnect endpoints write disconnect state directly.
+    The header's architecture-pattern badge is enriched here with the
+    real Temporal event-log count (read via describe), paired with the
+    FleetState-maintained state-write count.
     """
-    return await fleet.snapshot()
+    snapshot = await fleet.snapshot()
+    counters = snapshot.get("counters") or {}
+    counters["temporal_event_count"] = await _get_temporal_event_count()
+    snapshot["counters"] = counters
+    return snapshot
 
 
 @app.get("/api/state")

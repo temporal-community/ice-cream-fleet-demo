@@ -30,7 +30,6 @@ from agent_fleet.activities import (
     get_fleet_status,
     get_order_priorities,
     get_route_polyline,
-    increment_signal_counter,
     navigate_to,
     pickup_orders,
     publish_agent_event,
@@ -67,7 +66,7 @@ def create_workflow_worker(client: Client) -> Worker:
         client,
         task_queue=WORKFLOWS_QUEUE,
         workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow, OrderGenerationWorkflow],
-        activities=[publish_agent_event, publish_agent_events_batch, increment_signal_counter],
+        activities=[publish_agent_event, publish_agent_events_batch],
         plugins=[GoogleAdkPlugin()],
     )
 

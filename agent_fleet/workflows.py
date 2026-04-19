@@ -31,7 +31,6 @@ with workflow.unsafe.imports_passed_through():
         execute_customer_change,
         generate_order,
         get_route_polyline,
-        increment_signal_counter,
         navigate_to,
         pickup_orders,
         publish_agent_event,
@@ -83,30 +82,6 @@ ORDER_INTERVAL_SECONDS = 10
 
 DRIVER_CAPACITY = 3
 DRIVER_IDS = ["driver-a", "driver-b", "driver-c", "driver-d", "driver-e"]
-
-
-async def _count_signal() -> None:
-    """Bump the architecture-pattern signal counter shown in the demo header.
-
-    Fired (via a local activity on the workflow worker) after each successful
-    cross-workflow signal, so the audience can see milestone-signal volume
-    next to high-frequency state writes.
-
-    Truly best-effort: single attempt with a short schedule cap, and swallows
-    its own exceptions. Previously used FAST_RETRY (unlimited attempts) which
-    meant any persistent failure (e.g., activity not registered on the mock
-    worker) would retry forever and block the calling workflow indefinitely —
-    exactly the symptom that masked as a disconnect regression.
-    """
-    try:
-        await workflow.execute_local_activity(
-            increment_signal_counter,
-            start_to_close_timeout=timedelta(seconds=2),
-            schedule_to_close_timeout=timedelta(seconds=3),
-            retry_policy=RetryPolicy(maximum_attempts=1),
-        )
-    except Exception as e:
-        workflow.logger.warning(f"Could not bump signal counter: {e}")
 
 
 # --- Per-driver continuous delivery workflow ---
@@ -608,7 +583,6 @@ class DriverRouteWorkflow:
                                     delivery_lng=order.delivery_lng,
                                 ),
                             )
-                            await _count_signal()
                     except Exception as e:
                         workflow.logger.warning(
                             f"Could not signal parent with order_delivered for "
@@ -742,7 +716,6 @@ class OrderGenerationWorkflow:
                             event=order.event,
                         ),
                     )
-                    await _count_signal()
             except Exception as e:
                 workflow.logger.warning(
                     f"Could not signal parent with new order {order.order_id}: {e}"
@@ -1299,7 +1272,6 @@ class MeltdownDemoWorkflow:
                     delivery_lng=order.delivery_lng,
                 ),
             )
-            await _count_signal()
 
         workflow.logger.info(f"Order {self._orders_generated}: {order.order_id} → {driver_id}")
 
@@ -1349,7 +1321,6 @@ class MeltdownDemoWorkflow:
                     change_type=change.change_type,
                 ),
             )
-            await _count_signal()
 
         await workflow.execute_local_activity(
             publish_agent_event,
@@ -1402,7 +1373,6 @@ class MeltdownDemoWorkflow:
                             change_type=change.change_type,
                         ),
                     )
-                    await _count_signal()
                 # For pending/batched orders: also send cancel_order or
                 # update_order so the order is immediately removed/updated
                 # without a wasted navigation trip
@@ -1414,7 +1384,6 @@ class MeltdownDemoWorkflow:
                             change_type=change.change_type,
                         ),
                     )
-                    await _count_signal()
                 elif change.change_type == "address_change":
                     await self._route_handles[driver_id].signal(
                         DriverRouteWorkflow.update_order,
@@ -1426,7 +1395,6 @@ class MeltdownDemoWorkflow:
                             new_hotel=change.new_hotel,
                         ),
                     )
-                    await _count_signal()
                 # Resolve the HITL hold for active orders
                 await self._route_handles[driver_id].signal(
                     DriverRouteWorkflow.resolve_update,
@@ -1438,7 +1406,6 @@ class MeltdownDemoWorkflow:
                         new_hotel=change.new_hotel,
                     ),
                 )
-                await _count_signal()
                 if change.change_type == "cancel":
                     try:
                         self._driver_orders[driver_id].remove(change.order_id)
@@ -1466,7 +1433,6 @@ class MeltdownDemoWorkflow:
                         change_type="release",
                     ),
                 )
-                await _count_signal()
             await workflow.execute_local_activity(
                 publish_agent_event,
                 PublishAgentEventInput(

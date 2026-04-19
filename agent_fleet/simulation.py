@@ -92,13 +92,14 @@ CREATE TABLE IF NOT EXISTS agent_health (
     online INTEGER NOT NULL DEFAULT 1
 );
 
--- Architecture-pattern counters for the demo header badge.
--- signal_count: cross-workflow signals fired in this demo run (milestones).
--- state_write_count: driver position writes to FleetState (continuous telemetry).
--- The ratio makes the "milestones via signals, telemetry via shared state" pattern visible.
+-- Architecture-pattern counter for the demo header badge.
+-- state_write_count: driver position writes to FleetState (continuous telemetry
+-- deliberately kept OUT of Temporal's event log). Paired in the frontend with
+-- the real Temporal event-log length read from describe() on the server. No
+-- workflow-side counter for that side — the server just asks Temporal how
+-- many events each workflow has carried so far.
 CREATE TABLE IF NOT EXISTS counters (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    signal_count INTEGER NOT NULL DEFAULT 0,
     state_write_count INTEGER NOT NULL DEFAULT 0
 )
 """
@@ -148,9 +149,7 @@ class FleetState:
                 "INSERT OR IGNORE INTO agent_health (agent_name, online) VALUES (?, 1)",
                 (agent,),
             )
-        await conn.execute(
-            "INSERT OR IGNORE INTO counters (id, signal_count, state_write_count) VALUES (1, 0, 0)"
-        )
+        await conn.execute("INSERT OR IGNORE INTO counters (id, state_write_count) VALUES (1, 0)")
         await conn.commit()
 
     async def close(self) -> None:
@@ -284,26 +283,16 @@ class FleetState:
         )
         await conn.commit()
 
-    async def increment_signal_count(self, n: int = 1) -> None:
-        """Called from the workflow side (via a local activity) whenever a
-        cross-workflow signal is fired. Counts milestone events.
+    async def get_counters(self) -> dict[str, int]:
+        """Return the state-write counter. Paired on the server with
+        Temporal event-log length (read via describe) for the header badge.
         """
         conn = await self._get_conn()
-        await conn.execute("UPDATE counters SET signal_count = signal_count + ? WHERE id = 1", (n,))
-        await conn.commit()
-
-    async def get_counters(self) -> dict[str, int]:
-        conn = await self._get_conn()
-        async with conn.execute(
-            "SELECT signal_count, state_write_count FROM counters WHERE id = 1"
-        ) as cursor:
+        async with conn.execute("SELECT state_write_count FROM counters WHERE id = 1") as cursor:
             row = await cursor.fetchone()
         if row is None:
-            return {"signal_count": 0, "state_write_count": 0}
-        return {
-            "signal_count": int(row["signal_count"]),
-            "state_write_count": int(row["state_write_count"]),
-        }
+            return {"state_write_count": 0}
+        return {"state_write_count": int(row["state_write_count"])}
 
     async def set_driver_status(self, driver_id: str, status: DriverStatus) -> None:
         conn = await self._get_conn()
