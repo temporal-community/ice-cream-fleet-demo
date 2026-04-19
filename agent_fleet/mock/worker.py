@@ -21,6 +21,7 @@ from agent_fleet.activities import (
     generate_order,
     get_fleet_status,
     get_order_priorities,
+    increment_signal_counter,
     navigate_to,
     pickup_orders,
     publish_agent_event,
@@ -53,7 +54,7 @@ def create_workflow_worker(client: Client) -> Worker:
         client,
         task_queue=WORKFLOWS_QUEUE,
         workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow, OrderGenerationWorkflow],
-        activities=[publish_agent_event, publish_agent_events_batch],
+        activities=[publish_agent_event, publish_agent_events_batch, increment_signal_counter],
     )
 
 

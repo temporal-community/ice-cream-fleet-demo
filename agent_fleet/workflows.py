@@ -92,15 +92,18 @@ async def _count_signal() -> None:
     cross-workflow signal, so the audience can see milestone-signal volume
     next to high-frequency state writes.
 
-    Best-effort: swallows its own exceptions so a flaky counter never causes
-    a caller's signal-guard try/except to log a misleading "signal failed"
-    warning, and never fails a workflow over a display counter.
+    Truly best-effort: single attempt with a short schedule cap, and swallows
+    its own exceptions. Previously used FAST_RETRY (unlimited attempts) which
+    meant any persistent failure (e.g., activity not registered on the mock
+    worker) would retry forever and block the calling workflow indefinitely —
+    exactly the symptom that masked as a disconnect regression.
     """
     try:
         await workflow.execute_local_activity(
             increment_signal_counter,
-            start_to_close_timeout=timedelta(seconds=5),
-            retry_policy=FAST_RETRY,
+            start_to_close_timeout=timedelta(seconds=2),
+            schedule_to_close_timeout=timedelta(seconds=3),
+            retry_policy=RetryPolicy(maximum_attempts=1),
         )
     except Exception as e:
         workflow.logger.warning(f"Could not bump signal counter: {e}")
@@ -1336,7 +1339,8 @@ class MeltdownDemoWorkflow:
 
         # Signal child FIRST to hold delivery — before any local activities
         # that could delay the signal past the child's grace period
-        driver_id = self._find_driver_for_order(change.order_id)
+        driver_id_before_wait = self._find_driver_for_order(change.order_id)
+        driver_id = driver_id_before_wait
         if driver_id and driver_id in self._route_handles:
             await self._route_handles[driver_id].signal(
                 DriverRouteWorkflow.update_pending,
@@ -1384,17 +1388,21 @@ class MeltdownDemoWorkflow:
             )
 
             # Signal child with the approved decision.
-            # Send update_pending first for late-assigned orders (driver_id
-            # was None at submission, resolved after approval wait).
+            # Send update_pending again ONLY if the driver changed during the
+            # approval wait (order was unassigned at submission and got
+            # assigned while the human was deciding). Re-sending for orders
+            # whose driver was already known at submission is a duplicate
+            # that inflates the signal counter by 1 per approved change.
             if driver_id and driver_id in self._route_handles:
-                await self._route_handles[driver_id].signal(
-                    DriverRouteWorkflow.update_pending,
-                    OrderUpdateInput(
-                        order_id=change.order_id,
-                        change_type=change.change_type,
-                    ),
-                )
-                await _count_signal()
+                if driver_id != driver_id_before_wait:
+                    await self._route_handles[driver_id].signal(
+                        DriverRouteWorkflow.update_pending,
+                        OrderUpdateInput(
+                            order_id=change.order_id,
+                            change_type=change.change_type,
+                        ),
+                    )
+                    await _count_signal()
                 # For pending/batched orders: also send cancel_order or
                 # update_order so the order is immediately removed/updated
                 # without a wasted navigation trip

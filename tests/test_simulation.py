@@ -154,3 +154,37 @@ async def test_get_driver_position():
     lat, lng = await fleet.get_driver_position("driver-a")
     assert abs(lat - 36.12) < 0.001
     assert abs(lng - (-115.18)) < 0.001
+
+
+async def test_architecture_pattern_counters():
+    """Milestone + state-write counters reset, seed, and increment correctly.
+
+    These back the header badge that teaches the "milestones via signals,
+    telemetry via shared state" pattern — wrong numbers would undercut the
+    presenter's talking point.
+    """
+    await fleet.reset()
+
+    # Fresh demo starts at zero
+    counters = await fleet.get_counters()
+    assert counters == {"signal_count": 0, "state_write_count": 0}
+
+    # Position writes bump state_write_count (in the same transaction as the
+    # driver UPDATE, so a broken counter would also break position persistence).
+    await fleet.update_driver_position("driver-a", 36.12, -115.18)
+    await fleet.update_driver_position("driver-a", 36.13, -115.19)
+    counters = await fleet.get_counters()
+    assert counters["state_write_count"] == 2
+    assert counters["signal_count"] == 0
+
+    # Milestone signals bump signal_count independently
+    await fleet.increment_signal_count()
+    await fleet.increment_signal_count(3)
+    counters = await fleet.get_counters()
+    assert counters["signal_count"] == 4
+    assert counters["state_write_count"] == 2
+
+    # Reset zeroes both back to zero
+    await fleet.reset()
+    counters = await fleet.get_counters()
+    assert counters == {"signal_count": 0, "state_write_count": 0}

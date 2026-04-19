@@ -153,7 +153,7 @@
   }
   .arch-badge-row { display: flex; gap: 6px; }
   .arch-badge-label { color: #64748b; }
-  .arch-badge-value { color: #e2e8f0; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 3ch; text-align: right; }
+  .arch-badge-value { color: #e2e8f0; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 7ch; text-align: right; }
   .arch-badge-hint { font-size: 9px; color: #475569; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 1px; }
 
   /* --- Tab bar + panels --- */
@@ -1089,16 +1089,16 @@
     </h1>
   </div>
   <div class="header-right">
-    <div class="arch-badge" title="Milestones go to Temporal as signals (durable, replayable). Continuous telemetry (driver positions) goes to shared state (SQLite). Both are 'state,' but they answer different questions.">
+    <div class="arch-badge" title="Milestones are cross-workflow signals — durable, replayable, in Temporal's event log. State writes are driver position ticks — continuous telemetry kept in shared state (SQLite). Both are 'state,' but they answer different questions.">
       <div class="arch-badge-row">
-        <span class="arch-badge-label">Signals:</span>
+        <span class="arch-badge-label">Milestones:</span>
         <span class="arch-badge-value" id="arch-signal-count">0</span>
       </div>
       <div class="arch-badge-row">
         <span class="arch-badge-label">State writes:</span>
         <span class="arch-badge-value" id="arch-state-write-count">0</span>
       </div>
-      <div class="arch-badge-hint">milestones · telemetry</div>
+      <div class="arch-badge-hint">temporal signals · shared-state telemetry</div>
     </div>
     <div class="header-divider"></div>
     <a href="https://github.com/temporal-community/ice-cream-fleet-demo" target="_blank" class="header-brand" style="text-decoration:none;">
