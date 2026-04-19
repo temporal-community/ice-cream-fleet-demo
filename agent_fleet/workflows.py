@@ -91,12 +91,19 @@ async def _count_signal() -> None:
     Fired (via a local activity on the workflow worker) after each successful
     cross-workflow signal, so the audience can see milestone-signal volume
     next to high-frequency state writes.
+
+    Best-effort: swallows its own exceptions so a flaky counter never causes
+    a caller's signal-guard try/except to log a misleading "signal failed"
+    warning, and never fails a workflow over a display counter.
     """
-    await workflow.execute_local_activity(
-        increment_signal_counter,
-        start_to_close_timeout=timedelta(seconds=5),
-        retry_policy=FAST_RETRY,
-    )
+    try:
+        await workflow.execute_local_activity(
+            increment_signal_counter,
+            start_to_close_timeout=timedelta(seconds=5),
+            retry_policy=FAST_RETRY,
+        )
+    except Exception as e:
+        workflow.logger.warning(f"Could not bump signal counter: {e}")
 
 
 # --- Per-driver continuous delivery workflow ---
@@ -210,12 +217,14 @@ class DriverRouteWorkflow:
 
     @workflow.signal
     async def update_order(self, inp: OrderUpdateInput) -> None:
-        """Update delivery coordinates for pending/batched orders."""
+        """Update delivery coordinates (and hotel label) for pending/batched orders."""
         for order in self._pending_orders + self._batch_orders:
             if order.order_id == inp.order_id:
                 if inp.new_lat is not None and inp.new_lng is not None:
                     order.delivery_lat = inp.new_lat
                     order.delivery_lng = inp.new_lng
+                if inp.new_hotel is not None:
+                    order.hotel = inp.new_hotel
                 workflow.logger.info(f"Order {inp.order_id} updated — new destination")
                 return
         # Active order reroute is now handled by resolve_update("address_change")
@@ -920,8 +929,10 @@ class MeltdownDemoWorkflow:
         self._routes_done = True
         for handle in self._route_handles.values():
             try:
+                # Stop is a lifecycle/teardown signal — not a milestone, so it
+                # intentionally does NOT bump the signal counter shown in the
+                # header badge (that badge reflects business-milestone volume).
                 await handle.signal(DriverRouteWorkflow.stop)
-                await _count_signal()
             except Exception:
                 pass
 
@@ -1366,6 +1377,7 @@ class MeltdownDemoWorkflow:
                             change_type=change.change_type,
                             new_lat=change.new_lat,
                             new_lng=change.new_lng,
+                            new_hotel=change.new_hotel,
                         ),
                     )
                     await _count_signal()
