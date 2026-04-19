@@ -90,17 +90,6 @@ CREATE TABLE IF NOT EXISTS event_log (
 CREATE TABLE IF NOT EXISTS agent_health (
     agent_name TEXT PRIMARY KEY,
     online INTEGER NOT NULL DEFAULT 1
-);
-
--- Architecture-pattern counter for the demo header badge.
--- state_write_count: driver position writes to FleetState (continuous telemetry
--- deliberately kept OUT of Temporal's event log). Paired in the frontend with
--- the real Temporal event-log length read from describe() on the server. No
--- workflow-side counter for that side — the server just asks Temporal how
--- many events each workflow has carried so far.
-CREATE TABLE IF NOT EXISTS counters (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    state_write_count INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -149,7 +138,6 @@ class FleetState:
                 "INSERT OR IGNORE INTO agent_health (agent_name, online) VALUES (?, 1)",
                 (agent,),
             )
-        await conn.execute("INSERT OR IGNORE INTO counters (id, state_write_count) VALUES (1, 0)")
         await conn.commit()
 
     async def close(self) -> None:
@@ -169,7 +157,6 @@ class FleetState:
             "orders",
             "drivers",
             "agent_health",
-            "counters",
         ]:
             await conn.execute(f"DELETE FROM {table}")  # noqa: S608
         await conn.commit()
@@ -275,24 +262,7 @@ class FleetState:
             "INSERT INTO driver_path_history (driver_id, lat, lng, t) VALUES (?, ?, ?, ?)",
             (driver_id, lat, lng, time.time()),
         )
-        # Counter for the architecture-pattern badge — each position update is a
-        # high-frequency "state write" that we deliberately route through shared
-        # state (SQLite) instead of Temporal signals.
-        await conn.execute(
-            "UPDATE counters SET state_write_count = state_write_count + 1 WHERE id = 1"
-        )
         await conn.commit()
-
-    async def get_counters(self) -> dict[str, int]:
-        """Return the state-write counter. Paired on the server with
-        Temporal event-log length (read via describe) for the header badge.
-        """
-        conn = await self._get_conn()
-        async with conn.execute("SELECT state_write_count FROM counters WHERE id = 1") as cursor:
-            row = await cursor.fetchone()
-        if row is None:
-            return {"state_write_count": 0}
-        return {"state_write_count": int(row["state_write_count"])}
 
     async def set_driver_status(self, driver_id: str, status: DriverStatus) -> None:
         conn = await self._get_conn()
@@ -770,16 +740,12 @@ class FleetState:
             async for row in cursor:
                 health[row["agent_name"]] = bool(row["online"])
 
-        # Architecture-pattern counters for the header badge
-        counters = await self.get_counters()
-
         return {
             "drivers": drivers,
             "orders": orders_dict,
             "agent_events": events,
             "event_log": log,
             "agent_health": health,
-            "counters": counters,
         }
 
     async def get_fleet_summary(self) -> str:

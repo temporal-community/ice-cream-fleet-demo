@@ -141,19 +141,6 @@
     height: 24px;
     background: #465a78;
   }
-  .arch-badge {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
-    font-size: 11px;
-    line-height: 1.2;
-    color: #94a3b8;
-    letter-spacing: 0.3px;
-  }
-  .arch-badge-row { display: flex; gap: 6px; }
-  .arch-badge-label { color: #64748b; }
-  .arch-badge-value { color: #e2e8f0; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 7ch; text-align: right; }
 
   /* --- Tab bar + panels --- */
   .tab-bar {
@@ -1088,17 +1075,6 @@
     </h1>
   </div>
   <div class="header-right">
-    <div class="arch-badge" title="Temporal events is the real length of the workflow event histories (activities, signals, timers) — what Temporal is actually tracking. State writes is driver position ticks kept in shared state (SQLite) — telemetry we deliberately keep out of the event log. Both are 'state' but they answer different questions.">
-      <div class="arch-badge-row">
-        <span class="arch-badge-label">Temporal events:</span>
-        <span class="arch-badge-value" id="arch-temporal-event-count">0</span>
-      </div>
-      <div class="arch-badge-row">
-        <span class="arch-badge-label">State writes:</span>
-        <span class="arch-badge-value" id="arch-state-write-count">0</span>
-      </div>
-    </div>
-    <div class="header-divider"></div>
     <a href="https://github.com/temporal-community/ice-cream-fleet-demo" target="_blank" class="header-brand" style="text-decoration:none;">
       <img src="/static/img/temporal_logo.svg" alt="Temporal" title="Temporal — View on GitHub" style="height:40px;" />
     </a>
@@ -1499,15 +1475,6 @@ const crewMarkers = {};
 const crewTrails = {};
 let workerOnline = true;
 
-// --- Architecture counters (header badge) ---
-function updateArchCounters(counters) {
-  if (!counters) return;
-  const tev = document.getElementById('arch-temporal-event-count');
-  const state = document.getElementById('arch-state-write-count');
-  if (tev) tev.textContent = (counters.temporal_event_count ?? 0).toLocaleString();
-  if (state) state.textContent = (counters.state_write_count ?? 0).toLocaleString();
-}
-
 // --- WebSocket ---
 let ws;
 function connectWS() {
@@ -1520,7 +1487,6 @@ function connectWS() {
     updateChangeOrderDropdown(state.orders);
     updateAgentEvents(state.agent_events, state.agent_health);
     updateCrewDisconnectBanner(state.drivers);
-    updateArchCounters(state.counters);
   };
   ws.onclose = () => setTimeout(connectWS, 1000);
 }
@@ -1929,12 +1895,6 @@ async function resetDemo() {
   }
 
   // Force-clear UI regardless of API result
-  // Zero the architecture-pattern counters immediately so the badge doesn't
-  // show stale totals from the previous run until the next WebSocket tick.
-  // With no demo running, state writes don't happen, so without this a user
-  // could see last run's numbers linger indefinitely.
-  updateArchCounters({temporal_event_count: 0, state_write_count: 0});
-
   const el = document.getElementById('worker-status');
   el.className = 'worker-indicator online';
   el.innerHTML = '<div class="worker-dot"></div><span>Service Online</span>';

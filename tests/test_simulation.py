@@ -199,29 +199,3 @@ async def test_is_order_terminal():
     )
     await fleet.cancel_order("order-cancel-test")
     assert await fleet.is_order_terminal("order-cancel-test") is True
-
-
-async def test_state_write_counter():
-    """state_write_count resets, seeds at zero, and increments on every
-    position write. Paired in the header badge with a server-side Temporal
-    event-log count read via describe() — no workflow-side signal counter
-    to assert here. A zeroed or broken counter would undercut the
-    "milestones via Temporal, telemetry via shared state" talking point.
-    """
-    await fleet.reset()
-
-    # Fresh demo starts at zero
-    counters = await fleet.get_counters()
-    assert counters == {"state_write_count": 0}
-
-    # Position writes bump state_write_count (in the same transaction as the
-    # driver UPDATE, so a broken counter would also break position persistence).
-    await fleet.update_driver_position("driver-a", 36.12, -115.18)
-    await fleet.update_driver_position("driver-a", 36.13, -115.19)
-    counters = await fleet.get_counters()
-    assert counters["state_write_count"] == 2
-
-    # Reset zeroes it back to zero
-    await fleet.reset()
-    counters = await fleet.get_counters()
-    assert counters == {"state_write_count": 0}

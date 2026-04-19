@@ -118,7 +118,25 @@ Both child → parent signals are **guarded with try/except** so a terminated pa
 
 Both are "state" in a loose sense, but they answer different questions. Your event log is the *audit trail of decisions*. Shared state is the *current view for rendering*. A production Temporal system typically pairs Temporal with Redis or Postgres for exactly this split — in the demo, SQLite is the toy stand-in for that side store.
 
-**Seeing the split live.** The header badge in the demo UI shows two running counts: **Temporal events** (the real length of the workflow event histories, read server-side via `describe()` on each demo workflow) and **State writes** (every call to `update_driver_position`, counted in a SQLite counters row). The ratio grows heavily into the state-writes column during a run — that's the design working. If everything went through Temporal you'd see those numbers swap, and every position tick would be a permanent entry in the event log.
+### What's in the event log — and why it's bigger than you'd guess
+
+If you open the Temporal UI mid-demo and scroll through the `meltdown-demo` parent and any `route-driver-*` child, you'll see the histories fill up fast — ~100+ events per order in live mode. That's not over-logging. It's what **per-call durability** costs and buys you. Here's the breakdown per order:
+
+| Source | Activities | ≈ Events (×3: Scheduled + Started + Completed) |
+|---|---|---|
+| Fleet Agent (Gemini + tools `tool_get_fleet_status`, `tool_get_route_info`) | 3–5 | 9–15 |
+| Customer Agent (Gemini + tools `tool_get_order_priorities`, `google_search`) | 2–4 | 6–12 |
+| Dispatch Agent (Gemini + `tool_submit_assignment`) | 2 | 6 |
+| Assignment bookkeeping (`register_assignment`, `publish_agent_events_batch`) | 2–3 | 6–9 |
+| Delivery (`get_route_polyline`, `navigate_to` × 2–3 legs, `pickup_orders`, `deliver_order`, `set_driver_idle`) | 6–8 | 18–24 |
+| Signals between workflows (`add_order`, `order_delivered`, `new_order`) | — | 3 |
+| **Total per order** | **~15–25** | **~50–70** (mock), **~100+** (live) |
+
+Every one of those events is a durable checkpoint. Crash the worker mid-way through Dispatch Agent reasoning and Temporal replays what already completed (Fleet Agent's assessment, Customer Agent's assessment) from history — it doesn't re-call Gemini for the parts that already succeeded. That's the point of running ADK inline with `TemporalModel` and `activity_tool`: each LLM call and each tool call is its own retry unit.
+
+The alternative — wrapping the whole ADK pipeline in a single `reason_about_assignment` activity — would be ~3 events per order instead of ~100. But any mid-pipeline crash restarts the entire agent sequence from scratch, including the expensive Gemini calls that already succeeded. The demo deliberately takes the more-events-for-more-durability side of that tradeoff, and the Temporal UI shows you exactly what survived a crash.
+
+**Driver position updates don't go through the event log at all.** `navigate_to` heartbeats position to FleetState every 400ms during a drive. None of those writes are Temporal events — they're shared-state updates. At production scale (GPS pings every second across a 15-minute delivery), this is where the volume lives: thousands of position writes per delivery against ~100 durable orchestration events. The demo compresses the driving phase so the ratio isn't visually dramatic, but the architectural shape is the same: Temporal carries the decisions, shared state carries the telemetry.
 
 **What about queries between workflows?** Not a thing in Temporal Python (or any Temporal SDK, by design). Queries have to be deterministic-safe, and a synchronous cross-workflow query would break that — what if the other workflow isn't loaded on any worker? What if its state changes between replays? So queries are always *client-initiated*, from outside the cluster. From within a workflow you have three tools for cross-workflow coordination: signals (async events), `start_child_workflow` / awaiting child results (lifecycle), and activities that use the client to query a workflow (adds an activity round-trip — possible but rarely worth it). For the demo's needs, signal-based push is the idiomatic answer.
 

@@ -56,13 +56,13 @@ Use this framing at the start of the talk before any demo:
 
 ## Architecture Talking Points
 
-These are optional drop-ins for mid-demo — when the conversation turns to scale, or to what "production Temporal" actually looks like. The header badge in the top-right shows two live counters you can point at directly.
+Optional drop-ins for mid-demo — when the conversation turns to scale, or to what "production Temporal" actually looks like. Open the Temporal UI alongside the demo dashboard.
 
-- **"Look at the badge."** *Temporal events* is the real length of the workflow event histories — that's every activity, signal, and timer Temporal is actually carrying right now. *State writes* is driver position ticks we deliberately kept OUT of the event log. The ratio is the design: keep the event log for decisions and milestones, keep telemetry in shared state. If we'd signaled position instead, the left number would be the one climbing into the thousands.
-- **"Why not signal position to the parent?"** You could. You'd also inflate your event history, make the Temporal UI unreadable, and pay durability cost on data no decision depends on. The pattern is: signals for *milestones* (delivery completed, new order), shared state for *continuous data* (where is the car right now).
+- **"Open the event history."** Click into any `route-driver-*` workflow and scroll. You'll see ~50–100 events per order: each Gemini call, each tool call, each navigation leg, each delivery. That's **per-call durability** — every one of those is an independent retry unit. Crash the worker mid-Dispatch-Agent and the Fleet Agent's earlier assessment is replayed from history, not re-called. The alternative (one big `reason_about_assignment` activity) would be ~3 events per order but restart the entire agent pipeline on any failure.
+- **"Where are driver positions in the event log?"** They're not. `navigate_to` heartbeats position to shared state (SQLite here, Redis or Postgres in prod) every 400ms. None of those writes hit Temporal. If we'd signaled position instead, a single delivery in prod (15 min × 1 ping/sec) would be ~900 permanent events per driver per delivery. The pattern: signals for milestones (delivery complete, new order), shared state for continuous telemetry.
 - **"What about queries between workflows?"** Temporal doesn't support workflow-to-workflow queries — by design, because workflows have to replay deterministically. Cross-workflow coordination uses signals (durable async events). If the parent needs to "read" child state, the child pushes milestone events to the parent; the parent tracks the bookkeeping it decides on and doesn't try to mirror every field the child owns.
 
-Full breakdown of the communication choices and the event-log-vs-shared-state split lives in [HOW_IT_WORKS.md — Communication patterns](HOW_IT_WORKS.md#communication-patterns--what-goes-where-and-why).
+Full breakdown — including the per-order event table — lives in [HOW_IT_WORKS.md — Communication patterns](HOW_IT_WORKS.md#communication-patterns--what-goes-where-and-why) and [What's in the event log](HOW_IT_WORKS.md#whats-in-the-event-log--and-why-its-bigger-than-youd-guess).
 
 ---
 
