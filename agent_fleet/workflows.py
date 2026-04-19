@@ -484,7 +484,17 @@ class DriverRouteWorkflow:
                     workflow.logger.info(
                         f"[{order.order_id}] Holding at {order.hotel} — awaiting HITL decision"
                     )
-                    await workflow.wait_condition(lambda: self._update_decision is not None)
+                    # _stop escape: if the demo is shutting down while this
+                    # driver is parked awaiting approval, exit cleanly instead
+                    # of blocking forever. The parent's _wait_for_approval
+                    # returns None on shutdown without sending resolve_update,
+                    # so without this the child would hang and the parent's
+                    # `await handle` join would wait on the child indefinitely.
+                    await workflow.wait_condition(
+                        lambda: self._update_decision is not None or self._stop
+                    )
+                    if self._stop:
+                        break
 
                 # Process decision if one was made FOR THIS ORDER only
                 if (
@@ -949,9 +959,6 @@ class MeltdownDemoWorkflow:
         self._routes_done = True
         for handle in self._route_handles.values():
             try:
-                # Stop is a lifecycle/teardown signal — not a milestone, so it
-                # intentionally does NOT bump the signal counter shown in the
-                # header badge (that badge reflects business-milestone volume).
                 await handle.signal(DriverRouteWorkflow.stop)
             except Exception:
                 pass
@@ -1306,36 +1313,18 @@ class MeltdownDemoWorkflow:
             await self._drain_pending_signals()
 
     async def _drain_pending_signals(self) -> None:
-        # Snapshot pending changes, group by driver, and process them so:
-        #   - Different drivers run concurrently (so driver B isn't frozen at
-        #     its hotel while driver A's change awaits human approval).
-        #   - Changes for the SAME driver run serially. The child has only
-        #     one HITL hold slot (_update_pending_order); two concurrent
-        #     update_pending signals for the same driver would overwrite
-        #     that slot, causing the first order to skip its hold and the
-        #     stale decision from the first approval to fire against the
-        #     second order without human review.
-        # Approval consumption itself is race-safe across groups — see
-        # _wait_for_approval, which re-checks the queue after each wakeup.
-        pending = list(self._pending_changes)
-        self._pending_changes.clear()
-        if not pending:
-            return
-
-        per_driver: dict[str, list[CustomerChangeInput]] = {}
-        for change in pending:
-            # Use the driver if known; fall back to the order_id as a stable
-            # key so unassigned orders don't collapse into one group (and
-            # still serialize per-order, which is fine — serialization is
-            # only strictly needed for same-driver collisions).
-            key = self._find_driver_for_order(change.order_id) or f"unassigned:{change.order_id}"
-            per_driver.setdefault(key, []).append(change)
-
-        async def _process_group(changes: list[CustomerChangeInput]) -> None:
-            for c in changes:
-                await self._process_customer_change(c)
-
-        await asyncio.gather(*(_process_group(g) for g in per_driver.values()))
+        # Serial processing. Concurrent drain (asyncio.gather) was tried to
+        # avoid freezing driver B while driver A's change awaits human
+        # approval, but the child has a single-slot _update_pending_order
+        # and driver assignments can change mid-process — both same-driver
+        # groups and unassigned-order groups could race and overwrite that
+        # slot, dropping resolve_update sends against the stale guard. Serial
+        # is correct; the "different-driver freeze" becomes a UX limitation
+        # (at most one HITL change in flight at a time) which is fine given
+        # the demo presents changes one at a time.
+        while self._pending_changes:
+            change = self._pending_changes.pop(0)
+            await self._process_customer_change(change)
 
     async def _wait_for_approval(self) -> bool | None:
         """Pull the next approval off _pending_approvals, or None if the demo
@@ -1421,8 +1410,8 @@ class MeltdownDemoWorkflow:
             # Send update_pending again ONLY if the driver changed during the
             # approval wait (order was unassigned at submission and got
             # assigned while the human was deciding). Re-sending for orders
-            # whose driver was already known at submission is a duplicate
-            # that inflates the signal counter by 1 per approved change.
+            # whose driver was already known at submission is a duplicate —
+            # the child already has _update_pending_order set.
             if driver_id and driver_id in self._route_handles:
                 if driver_id != driver_id_before_wait:
                     await self._route_handles[driver_id].signal(
