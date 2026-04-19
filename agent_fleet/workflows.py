@@ -201,6 +201,7 @@ class DriverRouteWorkflow:
                 self._current_orders.remove(inp.order_id)
             except ValueError:
                 pass
+            self._clear_hitl_state_if(inp.order_id)
             return
         # Check batched orders
         before = len(self._batch_orders)
@@ -211,9 +212,23 @@ class DriverRouteWorkflow:
                 self._current_orders.remove(inp.order_id)
             except ValueError:
                 pass
+            self._clear_hitl_state_if(inp.order_id)
             return
         # Active order cancel is now handled by resolve_update("cancel")
         workflow.logger.info(f"Order {inp.order_id} not in pending/batch — handled by HITL flow")
+
+    def _clear_hitl_state_if(self, order_id: str) -> None:
+        """Clear any HITL hold state that targets the given order_id.
+
+        Prevents stale _update_pending_order / _update_decision from silently
+        firing against the NEXT order that reaches the HITL hold block.
+        """
+        if self._update_pending_order == order_id:
+            self._update_pending_order = None
+            self._update_decision = None
+            self._update_new_lat = None
+            self._update_new_lng = None
+            self._update_new_hotel = None
 
     @workflow.signal
     async def update_order(self, inp: OrderUpdateInput) -> None:
@@ -494,6 +509,15 @@ class DriverRouteWorkflow:
                     elif decision == "address_change":
                         # Reroute: update destination and re-navigate
                         if self._update_new_lat is not None and self._update_new_lng is not None:
+                            # If the order was still in pending/batch when the
+                            # change was approved, update_order already applied
+                            # the new coords — the batch loop navigated to the
+                            # new destination on its first trip. Skip the
+                            # otherwise-redundant re-navigation here.
+                            already_at_new_destination = (
+                                abs(order.delivery_lat - self._update_new_lat) < 0.0001
+                                and abs(order.delivery_lng - self._update_new_lng) < 0.0001
+                            )
                             order.delivery_lat = self._update_new_lat
                             order.delivery_lng = self._update_new_lng
                             if self._update_new_hotel is not None:
@@ -501,42 +525,48 @@ class DriverRouteWorkflow:
                             self._update_new_lat = None
                             self._update_new_lng = None
                             self._update_new_hotel = None
-                            workflow.logger.info(
-                                f"[{order.order_id}] HITL reroute approved — "
-                                f"navigating to new destination"
-                            )
-                            # Navigate to new destination
-                            reroute_waypoints = await workflow.execute_activity(
-                                get_route_polyline,
-                                args=[
-                                    self._current_lat,
-                                    self._current_lng,
-                                    order.delivery_lat,
-                                    order.delivery_lng,
-                                ],
-                                task_queue=DELIVERY_QUEUE,
-                                summary=f"[#{onum}] Rerouting to new destination",
-                                schedule_to_close_timeout=timedelta(minutes=5),
-                                start_to_close_timeout=timedelta(seconds=30),
-                                retry_policy=FAST_RETRY,
-                            )
-                            nav_result = await self._execute_navigate(
-                                driver_id,
-                                NavigateInput(
-                                    driver_id=driver_id,
-                                    order_id=order.order_id,
-                                    target_lat=order.delivery_lat,
-                                    target_lng=order.delivery_lng,
-                                    leg="delivery",
-                                    steps=30,
-                                    waypoints=reroute_waypoints,
-                                    start_lat=self._current_lat,
-                                    start_lng=self._current_lng,
-                                ),
-                                summary=f"[#{onum}] Rerouting to new destination",
-                            )
-                            self._current_lat = nav_result.final_lat
-                            self._current_lng = nav_result.final_lng
+                            if already_at_new_destination:
+                                workflow.logger.info(
+                                    f"[{order.order_id}] HITL reroute approved — "
+                                    f"coords already applied, skipping redundant nav"
+                                )
+                            else:
+                                workflow.logger.info(
+                                    f"[{order.order_id}] HITL reroute approved — "
+                                    f"navigating to new destination"
+                                )
+                                # Navigate to new destination
+                                reroute_waypoints = await workflow.execute_activity(
+                                    get_route_polyline,
+                                    args=[
+                                        self._current_lat,
+                                        self._current_lng,
+                                        order.delivery_lat,
+                                        order.delivery_lng,
+                                    ],
+                                    task_queue=DELIVERY_QUEUE,
+                                    summary=f"[#{onum}] Rerouting to new destination",
+                                    schedule_to_close_timeout=timedelta(minutes=5),
+                                    start_to_close_timeout=timedelta(seconds=30),
+                                    retry_policy=FAST_RETRY,
+                                )
+                                nav_result = await self._execute_navigate(
+                                    driver_id,
+                                    NavigateInput(
+                                        driver_id=driver_id,
+                                        order_id=order.order_id,
+                                        target_lat=order.delivery_lat,
+                                        target_lng=order.delivery_lng,
+                                        leg="delivery",
+                                        steps=30,
+                                        waypoints=reroute_waypoints,
+                                        start_lat=self._current_lat,
+                                        start_lng=self._current_lng,
+                                    ),
+                                    summary=f"[#{onum}] Rerouting to new destination",
+                                )
+                                self._current_lat = nav_result.final_lat
+                                self._current_lng = nav_result.final_lng
                     else:
                         workflow.logger.info(
                             f"[{order.order_id}] HITL change rejected — delivering normally"
@@ -1287,9 +1317,17 @@ class MeltdownDemoWorkflow:
             await self._drain_pending_signals()
 
     async def _drain_pending_signals(self) -> None:
-        while self._pending_changes:
-            change = self._pending_changes.pop(0)
-            await self._process_customer_change(change)
+        # Snapshot all pending changes and process them concurrently. The prior
+        # serial version froze driver B at its hotel while driver A's change
+        # awaited human approval — _process_customer_change blocks on
+        # wait_condition(approvals), so nothing else drained. Concurrent
+        # processing lets each child receive resolve_update independently.
+        # Approvals remain FIFO; for typical demo flow (one change submitted
+        # and approved before the next) attribution is unchanged.
+        pending = list(self._pending_changes)
+        self._pending_changes.clear()
+        if pending:
+            await asyncio.gather(*(self._process_customer_change(c) for c in pending))
 
     # --- Customer change handling ---
 

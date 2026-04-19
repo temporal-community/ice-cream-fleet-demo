@@ -508,7 +508,8 @@ class FleetState:
                         "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
                         (order_id, note),
                     )
-                await self._log_event(conn, f"Order {order_id} -> {status.value}: {note}")
+                msg = f"Order {order_id} -> {status.value}" + (f": {note}" if note else "")
+                await self._log_event(conn, msg)
         else:
             await conn.execute(
                 "UPDATE orders SET status=? WHERE order_id=?",
@@ -519,7 +520,8 @@ class FleetState:
                     "INSERT INTO order_status_log (order_id, message) VALUES (?, ?)",
                     (order_id, note),
                 )
-            await self._log_event(conn, f"Order {order_id} -> {status.value}: {note}")
+            msg = f"Order {order_id} -> {status.value}" + (f": {note}" if note else "")
+            await self._log_event(conn, msg)
         await conn.commit()
 
     async def complete_order_delivery(self, driver_id: str, order_id: str) -> tuple[bool, int]:
@@ -560,6 +562,22 @@ class FleetState:
         ) as cursor:
             row = await cursor.fetchone()
             return delivered, row["cnt"]
+
+    async def is_order_terminal(self, order_id: str) -> bool:
+        """Return True if the order is in a terminal state (DELIVERED/CANCELLED).
+
+        Used by deliver_order to detect retries after a successful DB commit —
+        skips re-setting DELIVERING status on the already-finished order, which
+        would otherwise overwrite IDLE and leave the driver visibly stuck.
+        """
+        conn = await self._get_conn()
+        async with conn.execute(
+            "SELECT status FROM orders WHERE order_id=?", (order_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return False
+        return row["status"] in self._TERMINAL_STATUSES
 
     async def get_order_driver(self, order_id: str) -> str | None:
         conn = await self._get_conn()
