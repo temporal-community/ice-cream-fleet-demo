@@ -486,7 +486,7 @@ class DriverRouteWorkflow:
                         start_lat=self._current_lat,
                         start_lng=self._current_lng,
                     ),
-                    summary=f"[#{onum}] Delivering to {order.hotel}",
+                    summary=f"[#{onum}] Driving to {order.hotel}",
                 )
                 self._current_lat = nav_result.final_lat
                 self._current_lng = nav_result.final_lng
@@ -654,9 +654,15 @@ class DriverRouteWorkflow:
 
                 self._active_order_id = None
                 self._cancel_pending = False
-                # Per-order holds: the hold was already popped when its
-                # decision was processed, and other orders' holds are
-                # untouched by construction. Nothing to clear here.
+                # Clean up any hold tied to this order. Usually the hold was
+                # already popped when its decision was processed inside the
+                # HITL block above — but there's a race where update_pending
+                # arrives AFTER the HITL gate evaluated False (no hold yet)
+                # but BEFORE deliver_order completed. That creates a late
+                # PendingHold(decision=None) that nothing else clears,
+                # leaking the order_id into pending_hold_order_ids for the
+                # lifetime of the workflow. Popping here closes the race.
+                self._pending_holds.pop(order.order_id, None)
 
                 # Remove from current_orders tracking
                 try:

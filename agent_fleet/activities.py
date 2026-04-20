@@ -336,6 +336,17 @@ async def navigate_to(inp: NavigateInput) -> NavigateOutput:
         await fleet.update_driver_position(inp.driver_id, new_lat, new_lng)
         await asyncio.sleep(0.4)
 
+    # Snap to exact target coords at end of leg. Google polylines end
+    # *near* but not exactly at the requested destination (the last
+    # waypoint is the closest road point to the target), which could
+    # leave the driver 20-50m short of inp.target_lat/lng. Without this
+    # snap, a retry after disconnect reads the slightly-off position
+    # from FleetState, fails the `dist_to_target < 0.001` skip check,
+    # and re-drives the entire polyline from its first waypoint (back
+    # at the origin) — the "teleport to origin + redo the drive"
+    # symptom.
+    await fleet.update_driver_position(inp.driver_id, inp.target_lat, inp.target_lng)
+
     # Driver arrived — but if disconnected, can't report back.
     # This simulates "delivery complete but comms lost."
     # Temporal sees the failure and retries until reconnected.
@@ -428,8 +439,15 @@ async def deliver_order(inp: DeliverInput) -> DeliverOutput:
     # Mark delivered (atomic: won't overwrite CANCELLED).
     # If `delivered` is False, a cancel won the race after our up-front
     # status check — report failure so the workflow skips the parent signal.
+    # complete_order_delivery unconditionally removes the driver_orders row
+    # regardless of the delivered flag, so remaining_count is accurate for
+    # the cancel-race path too. We still need to set IDLE if this was the
+    # driver's last order — otherwise the driver's status sticks on
+    # DELIVERING (set at line 434) through the return-to-base navigation.
     delivered, remaining_count = await fleet.complete_order_delivery(inp.driver_id, inp.order_id)
     if not delivered:
+        if remaining_count == 0:
+            await fleet.set_driver_status(inp.driver_id, DriverStatus.IDLE)
         activity.logger.info(
             f"{inp.driver_id} deliver_order — cancel won race mid-activity, "
             f"{inp.order_id} will not be signaled as delivered"
