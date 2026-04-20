@@ -422,6 +422,15 @@ async def deliver_order(inp: DeliverInput) -> DeliverOutput:
         )
         return DeliverOutput(driver_id=inp.driver_id, order_id=inp.order_id, success=True)
     if status == OrderStatus.CANCELLED.value:
+        # Same reasoning as the mid-activity cancel path below: if this
+        # cancelled order was the driver's last active order, the driver's
+        # FleetState status stays on EN_ROUTE_DELIVERY (set by the nav that
+        # just completed) through the return-to-base trip until
+        # set_driver_idle finally fires. Transition to IDLE here so the UI
+        # updates immediately when nothing else is in the queue.
+        remaining = await fleet.get_driver_orders(inp.driver_id)
+        if len(remaining) == 0:
+            await fleet.set_driver_status(inp.driver_id, DriverStatus.IDLE)
         activity.logger.info(
             f"{inp.driver_id} deliver_order skipped — {inp.order_id} CANCELLED before delivery"
         )
