@@ -1,20 +1,15 @@
-"""DemoTemporalModel — context-aware summaries and smaller payloads.
+"""Summary builder for the Temporal UI.
 
-Subclasses TemporalModel to:
-1. Generate dynamic summaries from llm_request (agent name, order, phase)
-2. Strip null fields from LlmRequest before serialization
+Generates context-aware summaries from an `LlmRequest` (agent name, order,
+phase) so each invoke_model activity in the Temporal UI shows what the agent
+is actually doing. Wired into `AdkActivityConfig(summary_fn=_build_summary)`.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import AsyncGenerator
 
 from google.adk.models.llm_request import LlmRequest
-from google.adk.models.llm_response import LlmResponse
-from temporalio import workflow
-from temporalio.contrib.google_adk_agents import TemporalModel
-from temporalio.contrib.google_adk_agents._model import invoke_model
 
 # Agent display names for Temporal UI summaries
 _AGENT_LABELS = {
@@ -110,37 +105,3 @@ def _build_summary(llm_request: LlmRequest) -> str:
         return f"{prefix}{agent_name} — weighing fleet + customer input"
 
     return f"{prefix}{agent_name} — reasoning"
-
-
-def _strip_nulls(obj: object) -> object:
-    """Recursively strip None values from dicts (reduces payload size)."""
-    if isinstance(obj, dict):
-        return {k: _strip_nulls(v) for k, v in obj.items() if v is not None}
-    if isinstance(obj, list):
-        return [_strip_nulls(item) for item in obj]
-    return obj
-
-
-class DemoTemporalModel(TemporalModel):
-    """TemporalModel with dynamic summaries and null-stripped payloads."""
-
-    async def generate_content_async(
-        self, llm_request: LlmRequest, stream: bool = False
-    ) -> AsyncGenerator[LlmResponse, None]:
-        summary = _build_summary(llm_request)
-
-        # Strip nulls from the request to reduce payload size in workflow history
-        clean_data = _strip_nulls(llm_request.model_dump())
-        clean_request = LlmRequest.model_validate(clean_data)
-
-        # Override summary for this specific call
-        config = self._activity_config.copy()
-        config["summary"] = summary
-
-        responses = await workflow.execute_activity(
-            invoke_model,
-            args=[clean_request],
-            **config,
-        )
-        for response in responses:
-            yield response

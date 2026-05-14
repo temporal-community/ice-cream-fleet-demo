@@ -22,10 +22,10 @@ from google.adk.agents import Agent, ParallelAgent, SequentialAgent
 from google.adk.tools import ToolContext
 from google.adk.tools.google_search_tool import GoogleSearchTool
 from temporalio.common import RetryPolicy
-from temporalio.workflow import ActivityConfig
+from temporalio.contrib.google_adk_agents import AdkActivityConfig, TemporalModel
 
 from agent_fleet._activity_tool import activity_tool
-from agent_fleet._demo_model import DemoTemporalModel as TemporalModel
+from agent_fleet._demo_model import _build_summary
 from agent_fleet.activities import (
     tool_get_fleet_status,
     tool_get_order_priorities,
@@ -107,9 +107,9 @@ def create_assignment_fleet_agent() -> Agent:
         name="assignment_fleet_agent",
         model=TemporalModel(
             DEFAULT_MODEL,
-            activity_config=ActivityConfig(
+            activity_config=AdkActivityConfig(
                 task_queue=AGENTS_QUEUE,
-                summary="Fleet Agent — LLM reasoning",
+                summary_fn=_build_summary,
             ),
         ),
         description=(
@@ -147,9 +147,9 @@ def create_assignment_customer_agent() -> Agent:
         name="assignment_customer_agent",
         model=TemporalModel(
             DEFAULT_MODEL,
-            activity_config=ActivityConfig(
+            activity_config=AdkActivityConfig(
                 task_queue=AGENTS_QUEUE,
-                summary="Customer Agent — LLM reasoning",
+                summary_fn=_build_summary,
             ),
         ),
         description=(
@@ -184,9 +184,9 @@ def create_assignment_dispatch_agent() -> Agent:
         name="assignment_dispatch_agent",
         model=TemporalModel(
             DEFAULT_MODEL,
-            activity_config=ActivityConfig(
+            activity_config=AdkActivityConfig(
                 task_queue=AGENTS_QUEUE,
-                summary="Dispatch Agent — LLM reasoning",
+                summary_fn=_build_summary,
             ),
         ),
         description=(
