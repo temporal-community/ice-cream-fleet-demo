@@ -6,6 +6,14 @@ Ziggy's Ice Cream runs its Las Vegas Strip delivery fleet on Temporal. When orde
   <img src=".github/assets/meltdown-screenshot-3.png" alt="Meltdown demo dashboard" width="900">
 </p>
 
+<p align="center">
+  <a href="https://youtube.com/shorts/Wq7hiN2KYnk">
+    <img src="https://img.youtube.com/vi/Wq7hiN2KYnk/hqdefault.jpg" alt="Watch the Meltdown demo on YouTube" width="280">
+  </a>
+  <br>
+  <em>▶ <a href="https://youtube.com/shorts/Wq7hiN2KYnk">Watch the demo on YouTube</a></em>
+</p>
+
 Built with **Google ADK** for multi-agent reasoning and **Temporal** for durable execution. Orders auto-generate on a timer. AI agents (Fleet, Customer, Dispatch) evaluate positions, capacity, ETAs, and priority — then assign each order to the best driver. Drivers batch-pickup at Ziggy's and deliver sequentially. When failures hit, Temporal's event log holds every step — nothing is lost, nothing repeats.
 
 > **Terminology:** AI agents **reason** (LLM + tools, run inline via ADK). Delivery actors **execute** (child workflows that carry out routes). They are not Temporal workers.
