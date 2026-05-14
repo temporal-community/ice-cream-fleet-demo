@@ -63,7 +63,7 @@ and FastAPI server (`python -m agent_fleet.server`). No manual Temporal setup ne
   `GoogleAdkPlugin` is on both workflow and agents workers (sandbox + determinism on
   workflow side, `invoke_model` activity on agents side). Agents use the upstream
   `TemporalModel` with `AdkActivityConfig(summary_fn=_build_summary)` — `_build_summary`
-  in `_demo_model.py` generates context-aware summaries (agent name, order, phase) shown
+  in `agents.py` generates context-aware summaries (agent name, order, phase) shown
   in the Temporal UI per invoke_model activity. `_activity_tool.py` builds its own
   dynamic summaries for tool-call activities from the bound arguments.
   `publish_agent_event` and `publish_agent_events_batch` are registered on the
