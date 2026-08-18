@@ -158,15 +158,26 @@ async def run_worker() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, shutdown_event.set)
 
-    # Run all workers; cancel on shutdown signal
+    # Run all workers; stop the group if a signal arrives or any worker exits.
     tasks = [asyncio.create_task(w.run()) for w in workers]
     shutdown_task = asyncio.create_task(shutdown_event.wait())
-    done, _ = await asyncio.wait([*tasks, shutdown_task], return_when=asyncio.FIRST_COMPLETED)
-    if shutdown_event.is_set():
-        logger.info("Shutdown signal received, stopping workers...")
+    try:
+        done, _ = await asyncio.wait(
+            [*tasks, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if shutdown_task in done:
+            logger.info("Shutdown signal received, stopping workers...")
+        else:
+            completed_worker = next(task for task in tasks if task in done)
+            completed_worker.result()
+            raise RuntimeError("A Temporal worker stopped unexpectedly")
+    finally:
+        shutdown_task.cancel()
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(shutdown_task, return_exceptions=True)
         logger.info("Workers stopped.")
 
 

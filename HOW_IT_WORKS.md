@@ -85,7 +85,7 @@ OrderGenerationWorkflow fires on timer
 
 The key design principles:
 - **Child workflows give you fault isolation.** Each delivery actor runs independently. If Driver-A hits an error, the others keep running.
-- **Workflows own state, activities are pure.** Activities receive everything they need as inputs — they never read shared state for decision-making. The server queries workflows directly for the frontend.
+- **Workflows own durable orchestration state.** Activities perform external I/O and maintain the disposable FleetState projection; the server reads that projection for the frontend. Agent tools may read it as current operational context, but Temporal history remains the replay source of truth.
 - **Disconnect uses Temporal retry.** Activities check FleetState for disconnect (simulates network unreachability), fail, and Temporal retries with backoff. The delivery actor finishes its delivery but can't report back. On reconnect, a `sync_driver_position` activity reads the actual position from FleetState so the workflow resumes from where the driver actually is — no teleporting. Completed deliveries are not repeated; the batch continues from the next pending order.
 
 ### Communication patterns — what goes where, and why
@@ -213,28 +213,29 @@ The current design keeps both frameworks doing what they're best at: **ADK compo
 
 ### The 3-queue worker architecture
 
-The demo runs three Temporal workers in a **separate worker process** (`python -m agent_fleet.worker`), each on a dedicated task queue. The FastAPI server runs in its own process — it queries Temporal workflows for state and sends signals only.
+The demo runs three Temporal workers in a **separate worker process** (`python -m agent_fleet.worker`), each on a dedicated task queue. The FastAPI server runs in its own process — it reads FleetState for the live WebSocket view and sends control signals to Temporal.
 
 | Queue | Worker | What it runs |
 |---|---|---|
-| `meltdown-workflows` | Workflows only | `MeltdownDemoWorkflow`, `DriverRouteWorkflow`, `OrderGenerationWorkflow` — no activities, dedicated to replay |
+| `meltdown-workflows` | Workflows + local projection activities | `MeltdownDemoWorkflow`, `DriverRouteWorkflow`, `OrderGenerationWorkflow`, `publish_agent_event`, `publish_agent_events_batch` |
 | `meltdown-delivery` | Delivery | `navigate_to`, `pickup_orders`, `deliver_order`, `generate_order`, `execute_customer_change`, `get_route_polyline`, `get_fleet_status`, `get_order_priorities`, `publish_agent_event`, `sync_driver_position` |
 | `meltdown-agents` | Agents | `register_assignment`, `tool_get_fleet_status`, `tool_get_order_priorities`, `tool_get_route_info` + `google_search` (Gemini grounding) |
 
-**Why a workflows-only worker?** Workflows must be deterministic and replayable. Keeping them on a dedicated worker with no activities makes it physically impossible for workflow code to touch `FleetState` (SQLite WAL-backed, `fleet_state.db`) or do I/O. This is the Temporal-idiomatic pattern for production deployments.
+**Why a dedicated workflow queue?** Workflows must be deterministic and replayable. Keeping replay work on its own queue prevents slow delivery and model activities from starving Workflow Tasks. Two small local activities publish UI summaries; all other I/O runs on the delivery or agents queues.
 
 **Why separate activity queues?** LLM calls are slow — a single Gemini call can take 3–5 seconds. Without queue separation, a flood of assignment requests could fill all worker slots and starve navigation activities, causing drivers to miss heartbeat timeouts. The agents queue is rate-limited to 5 concurrent activities; the delivery queue runs 20.
 
-**Why separate processes?** The server does not run workers. It queries Temporal workflows directly via `_build_snapshot_from_queries()` — calling `MeltdownDemoWorkflow.get_status` and `DriverRouteWorkflow.get_status` for every WebSocket push. This means the server process has no FleetState dependency, no activity registration, and no GoogleAdkPlugin. All decision data and UI state lives in workflows, accessible via Temporal queries. The worker process owns all activities and workflow execution.
+**Why separate processes?** The server does not run workers or register activities. It serves the SPA, reads `fleet.snapshot()` for the live view, and sends signals for demo controls. The worker process owns all Workflow and Activity execution. SQLite WAL mode lets both processes share the disposable FleetState projection without mixing it up with Temporal's durable state.
 
 The three workers are set up in [`agent_fleet/worker.py`](agent_fleet/worker.py):
 
 ```python
 def create_workflow_worker(client: Client) -> Worker:
-    """Workflow-only worker — no activities, dedicated to replay."""
+    """Workflow worker with small local UI-projection activities."""
     return Worker(client, task_queue=WORKFLOWS_QUEUE,
                   workflows=[MeltdownDemoWorkflow, DriverRouteWorkflow,
                              OrderGenerationWorkflow],
+                  activities=[publish_agent_event, publish_agent_events_batch],
                   plugins=[GoogleAdkPlugin()])  # sandbox + determinism for replay
 
 def create_agents_worker(client: Client) -> Worker:
@@ -269,7 +270,7 @@ Without Temporal, the same orchestration would require:
 
 Temporal collapses all of that into the workflow execution model. The event log *is* the state persistence. `execute_activity` *is* the retry logic. Signals *are* the message passing. Cancellation scopes *are* the interrupt mechanism. The workflow code reads like a straightforward sequential program because Temporal handles everything else.
 
-In this demo, the workflows are the source of truth for all operational state — driver positions, order assignments, disconnect status. Activities receive this state as inputs and return results. The server queries workflows directly for the frontend WebSocket via `_build_snapshot_from_queries()` — no intermediate FleetState needed. If the worker process restarts, Temporal replays the workflows, activities re-execute, and the server's queries return fresh state.
+In this demo, Workflows are the source of truth for durable orchestration: assignments, delivery progress, retries, waits, and cross-workflow coordination. FleetState is a disposable live projection and simulated external operations surface for map positions, health flags, and UI events. If the worker process restarts, Temporal replays the Workflows and Activities rebuild the projection as execution resumes.
 
 ### Live mode execution pipeline (end-to-end)
 
@@ -329,5 +330,3 @@ This traces a single order from button click to delivery — every function and 
 - On disconnect mid-batch: driver finishes current delivery, stays at hotel, Temporal retries. On reconnect, resumes from next order in batch — completed deliveries are not repeated
 
 **Key difference in live vs mock:** In live mode, ADK runs inline in the workflow — every LLM call and tool call is a separate Temporal activity visible in the event log. In mock mode, the entire reasoning is a single `reason_about_assignment` activity.
-
-

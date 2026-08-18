@@ -18,8 +18,8 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,8 +28,6 @@ from temporalio.client import Client
 from temporalio.contrib.pydantic import PydanticPayloadConverter
 from temporalio.converter import DataConverter
 from temporalio.service import RPCError
-
-load_dotenv()
 
 from agent_fleet.config import GOOGLE_API_KEY, TEMPORAL_ADDRESS
 from agent_fleet.locations import COSMOPOLITAN, VENUES, WAREHOUSE, WAREHOUSE_LABEL
@@ -87,7 +85,11 @@ async def lifespan(app: FastAPI):
         ),
     )
     logger.info(f"Connected to Temporal at {TEMPORAL_ADDRESS}")
-    yield
+    try:
+        yield
+    finally:
+        await fleet.close()
+        _temporal_client = None
 
 
 app = FastAPI(title="Meltdown Ice Cream Delivery", lifespan=lifespan)
@@ -143,7 +145,13 @@ async def reset_demo():
 
 
 class DriverDisconnectRequest(BaseModel):
-    driver_id: str = "driver-a"
+    driver_id: Literal[
+        "driver-a",
+        "driver-b",
+        "driver-c",
+        "driver-d",
+        "driver-e",
+    ] = "driver-a"
 
 
 @app.post("/api/disconnect-crew")
@@ -228,7 +236,7 @@ async def reconnect_driver(body: DriverDisconnectRequest):
 
 
 class AgentDisconnectRequest(BaseModel):
-    agent_name: str = "fleet_agent"
+    agent_name: Literal["fleet_agent", "customer_agent"] = "fleet_agent"
 
 
 @app.post("/api/disconnect-agent")
@@ -280,7 +288,7 @@ async def reconnect_agent(body: AgentDisconnectRequest):
 
 class CustomerChangeRequest(BaseModel):
     order_id: str
-    change_type: str = "address_change"  # "address_change" or "cancel"
+    change_type: Literal["address_change", "cancel"] = "address_change"
     new_details: str = ""
     new_lat: float | None = None
     new_lng: float | None = None

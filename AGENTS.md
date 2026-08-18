@@ -17,9 +17,10 @@ and FastAPI server (`python -m agent_fleet.server`). No manual Temporal setup ne
 
 ## Architecture
 
-- **Two separate processes**: FastAPI server (`server.py`) queries Temporal workflows for state
-  and sends signals only — no workers, no FleetState reads. Workers run in a separate process
-  (`worker.py`) with live/mock mode selection at startup (`GOOGLE_API_KEY` set → live, not set → mock).
+- **Two separate processes**: FastAPI server (`server.py`) reads the FleetState projection for
+  WebSocket updates and sends signals to Temporal — it does not run workers. Workers run in a
+  separate process (`worker.py`) with live/mock mode selection at startup
+  (`GOOGLE_API_KEY` set → live, not set → mock).
 - **Workflows own state** (`workflows.py`): `MeltdownDemoWorkflow` owns driver positions, order
   assignments, and disconnect status. Builds `DriverSnapshot`s and passes to activities as inputs.
   Capacity guardrail: if ADK assigns to a full (3 orders) or disconnected driver, auto-reassigns
@@ -57,13 +58,14 @@ and FastAPI server (`python -m agent_fleet.server`). No manual Temporal setup ne
   `OrderGenerationWorkflow` is a child workflow that generates orders on a randomized timer and
   signals the parent. Parent handles assignment.
 - **Server reads FleetState** (`server.py`): WebSocket data comes from `fleet.snapshot()` (SQLite).
-  Server also writes disconnect/reconnect state directly. Temporal queries used for structural
-  state during development — FleetState is the display authority.
-- **Activities are pure** (`activities.py`): receive all decision data as inputs, never read
-  FleetState for logic. `@activity.defn` with no `name=` override (function names are activity names).
-- **FleetState** (`simulation.py`): SQLite WAL-backed UI projection. Backed by `fleet_state.db`
-  for cross-process sharing — activities in the worker write positions/statuses, server reads
-  for the frontend WebSocket. In production this would be Redis or Postgres.
+  Server also writes disconnect/reconnect state directly for immediate display.
+- **Activities own I/O** (`activities.py`): navigation and delivery activities update the
+  projection; agent tools read it for current fleet context; disconnect checks simulate an
+  external service boundary. Workflow code never performs this I/O directly.
+- **FleetState** (`simulation.py`): SQLite WAL-backed live projection and simulated operational
+  data source. Backed by `fleet_state.db` for cross-process sharing — activities write
+  positions/statuses and the server reads snapshots for the frontend. It is not Temporal's
+  durable orchestration state. In production this role would typically use Redis or Postgres.
 - **3-queue workers** (`worker.py`): workflows + local activities, delivery, agents.
   `GoogleAdkPlugin` is on both workflow and agents workers (sandbox + determinism on
   workflow side, `invoke_model` activity on agents side). Agents use the upstream
