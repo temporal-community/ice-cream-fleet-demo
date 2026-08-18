@@ -1,17 +1,23 @@
-# Meltdown — Ice Cream Delivery Fleet Demo <img src="https://github.com/google/adk-docs/raw/main/docs/assets/agent-development-kit.png" alt="Google ADK" height="28">
+# Ziggy's Ice Cream Fleet — Google ADK + Temporal <img src="https://github.com/google/adk-docs/raw/main/docs/assets/agent-development-kit.png" alt="Google ADK" height="28">
 
 [![Google Cloud Next '26](https://img.shields.io/badge/Google_Cloud_Next-%2726-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white)](https://cloud.google.com/blog/topics/google-cloud-next/google-cloud-next-2026-wrap-up)
 [![Temporal](https://img.shields.io/badge/Temporal-141414?style=for-the-badge&logo=temporal&logoColor=white)](https://docs.temporal.io/develop/python/integrations/google-adk)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2EA44F?style=for-the-badge)](LICENSE)
 
-**A visual Python demo of durable multi-agent reasoning, fault-tolerant
-delivery workflows, and operator-in-the-loop changes on the Las Vegas Strip.**
+**Meltdown is a visual Python demo of the Google ADK integration for Temporal:
+durable multi-agent reasoning, fault-tolerant delivery workflows, and
+operator-in-the-loop changes on the Las Vegas Strip.**
 
 Created for [Google Cloud Next '26](https://cloud.google.com/blog/topics/google-cloud-next/google-cloud-next-2026-wrap-up)
 in Las Vegas. Google ADK composes the Fleet, Customer, and Dispatch agents;
 Temporal preserves every model call, tool call, delivery step, retry, signal,
 and human wait when services disappear.
+
+> **This is the Google ADK-specific Ziggy's demo.** The
+> [cross-framework Ziggy's demo](https://github.com/temporal-community/durable-hitl-agents)
+> combines Google ADK and LangGraph and explores human-in-the-loop patterns for
+> autonomous systems.
 
 <p align="center">
   <a href=".github/assets/meltdown-screenshot-3.png">
