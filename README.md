@@ -1,4 +1,4 @@
-# Ziggy's Ice Cream Fleet — Google ADK + Temporal <img src="https://github.com/google/adk-docs/raw/main/docs/assets/agent-development-kit.png" alt="Google ADK" height="28">
+# Ziggy's Ice Cream Fleet — Multi-Agent Demo with Google ADK + Temporal <img src="https://github.com/google/adk-docs/raw/main/docs/assets/agent-development-kit.png" alt="Google ADK" height="28">
 
 [![Google Cloud Next '26](https://img.shields.io/badge/Google_Cloud_Next-%2726-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white)](https://cloud.google.com/blog/topics/google-cloud-next/google-cloud-next-2026-wrap-up)
 [![Temporal](https://img.shields.io/badge/Temporal-141414?style=for-the-badge&logo=temporal&logoColor=white)](https://docs.temporal.io/develop/python/integrations/google-adk)
